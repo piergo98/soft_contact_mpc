@@ -12,8 +12,8 @@ params = {
     'leg_length': 0.35,  # leg length
     'dmin': 0.03,  # minimum distance
     'l_box': 0.002,  # box length
-    'gamma': 50.0,  # penalty on the distance
-    'gamma_v': 50.0,  # penalty on the velocity
+    'gamma': 10.0,  # penalty on the distance
+    'gamma_v': 10.0,  # penalty on the velocity
 }
 
 # Define the initial state
@@ -151,8 +151,8 @@ plt.grid()
 # print optimal controls
 plt.figure(5)
 plt.subplot(2, 1, 1)
-plt.plot(tgrid, Fz_p_opt, '-o', label='Fz_P')
-plt.plot(tgrid, Fz_p_opt_sig, '-o', label='Fz_P_sig')
+plt.step(tgrid, Fz_p_opt, '-o', label='Fz_P', where='post')
+plt.step(tgrid, Fz_p_opt_sig, '-o', label='Fz_P_sig', where='post')
 plt.xlabel('t')
 plt.ylabel('u')
 plt.legend()
