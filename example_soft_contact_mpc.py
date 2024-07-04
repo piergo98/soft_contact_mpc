@@ -1,6 +1,9 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from utils.soft_contact_mpc import SoftContactMPC
+from utils.leg_kinematics import LegKinematics
+
+PLOT = True
 
 # Define the system parameters
 params = {
@@ -8,12 +11,12 @@ params = {
     'I': 0.35,  # moment of inertia
     'length': 0.235,  # length
     'width': 0.3,  # width
-    'height': 0.4,  # height
-    'leg_length': 0.35,  # leg length
+    'height': 0.38,  # height
+    'leg_length': 0.295,  # leg length
     'dmin': 0.03,  # minimum distance
     'l_box': 0.002,  # box length
-    'gamma': 10.0,  # penalty on the distance
-    'gamma_v': 10.0,  # penalty on the velocity
+    'gamma': 100.0,  # penalty on the distance
+    'gamma_v': 100.0,  # penalty on the velocity
 }
 
 # Define the initial state
@@ -36,7 +39,7 @@ soft_contact_mpc = SoftContactMPC(x0, u0, n_states, n_controls, n_horizon, time_
 # Set bounds for the optimization variables
 # Bound controls
 v_bw = 10.0
-f_bw = 100
+f_bw = 100.0
 lbu = np.array([-f_bw, -v_bw])
 ubu = np.array([f_bw, v_bw])
 soft_contact_mpc.set_bounds_u(lbu, ubu)
@@ -46,8 +49,8 @@ z_g_min = 0.0
 z_g_max = 20.0
 z_p_min = -0.1
 z_p_max = 10.0
-vz_g_min = -2000.0
-vz_g_max = 2000.0
+vz_g_min = -200.0
+vz_g_max = 200.0
 lb = np.array([z_g_min, z_p_min, vz_g_min])
 ub = np.array([z_g_max, z_p_max, vz_g_max])
 soft_contact_mpc.set_bounds_x(lb, ub)
@@ -93,31 +96,32 @@ soft_contact_mpc.opt_var_0, z0_g, z0_p, Fz_p0, vz_p0, terrain = soft_contact_mpc
 
 tgrid0 = np.linspace(0, soft_contact_mpc.T, soft_contact_mpc.N)
 
-# Plot initial condition
-plt.figure(1)
-plt.plot(tgrid0, z0_g, '-o', label='z_G')
-plt.plot(tgrid0, z0_p, '-o', label='z_P')
-plt.plot(tgrid0, terrain, '-', label='terrain')
-plt.xlabel('t')
-plt.ylabel('pos')
-plt.legend()
-plt.grid()
+if PLOT:
+    # Plot initial condition
+    plt.figure(1)
+    plt.plot(tgrid0, z0_g, '-o', label='z_G')
+    plt.plot(tgrid0, z0_p, '-o', label='z_P')
+    plt.plot(tgrid0, terrain, '-', label='terrain')
+    plt.xlabel('t')
+    plt.ylabel('pos')
+    plt.legend()
+    plt.grid()
 
-# Plot controls
-plt.figure(2)
-plt.subplot(2, 1, 1)
-plt.plot(tgrid0, Fz_p0, '-o', label='Fz_P')
-plt.xlabel('t')
-plt.ylabel('u')
-plt.legend()
-plt.grid()
-plt.subplot(2, 1, 2)
-plt.plot(tgrid0, vz_p0, '-o', label='vz_P') 
-plt.xlabel('t')
-plt.ylabel('u')
-plt.legend()
-plt.grid()
-# plt.show()
+    # Plot controls
+    plt.figure(2)
+    plt.subplot(2, 1, 1)
+    plt.plot(tgrid0, Fz_p0, '-o', label='Fz_P')
+    plt.xlabel('t')
+    plt.ylabel('u')
+    plt.legend()
+    plt.grid()
+    plt.subplot(2, 1, 2)
+    plt.plot(tgrid0, vz_p0, '-o', label='vz_P') 
+    plt.xlabel('t')
+    plt.ylabel('u')
+    plt.legend()
+    plt.grid()
+    # plt.show()
 
 # Create the optimization problem
 soft_contact_mpc.create_solver()
@@ -129,39 +133,113 @@ z_g_opt, z_p_opt, vz_g_opt, Fz_p_opt, vz_p_opt, Fz_p_opt_sig, vz_p_opt_sig = sof
 tgrid = np.linspace(0, soft_contact_mpc.T, soft_contact_mpc.N)
 #print(tgrid)
 
-# print optimal trajectory
-plt.figure(3)
-plt.plot(tgrid, z_g_opt, '-o', label='z_G')
-plt.plot(tgrid, z_p_opt, '-o', label='z_P')
-plt.plot(tgrid, terrain, '-', label='terrain')
-plt.xlabel('t')
-plt.ylabel('pos')
-plt.legend()
-plt.grid()
+if PLOT:
+    # print optimal trajectory
+    plt.figure(3)
+    plt.plot(tgrid, z_g_opt, '-o', label='z_G')
+    plt.plot(tgrid, z_p_opt, '-o', label='z_P')
+    plt.plot(tgrid, terrain, '-', label='terrain')
+    plt.xlabel('t')
+    plt.ylabel('pos')
+    plt.legend()
+    plt.grid()
 
-# print velocity
-plt.figure(4)
-plt.plot(tgrid, vz_g_opt, '-o', label='vz_G')
-plt.xlabel('t')
-plt.ylabel('vel')
-plt.legend()
-plt.grid()
+    # print velocity
+    plt.figure(4)
+    plt.plot(tgrid, vz_g_opt, '-o', label='vz_G')
+    plt.xlabel('t')
+    plt.ylabel('vel')
+    plt.legend()
+    plt.grid()
 
 
-# print optimal controls
-plt.figure(5)
-plt.subplot(2, 1, 1)
-plt.step(tgrid, Fz_p_opt, '-o', label='Fz_P', where='post')
-plt.step(tgrid, Fz_p_opt_sig, '-o', label='Fz_P_sig', where='post')
-plt.xlabel('t')
-plt.ylabel('u')
-plt.legend()
-plt.grid()
-plt.subplot(2, 1, 2)
-plt.plot(tgrid, vz_p_opt, '-o', label='vz_P')
-plt.plot(tgrid, vz_p_opt_sig, '-o', label='vz_P_sig')
-plt.xlabel('t')
-plt.ylabel('u')
-plt.legend()
-plt.grid()
-plt.show()
+    # print optimal controls
+    plt.figure(5)
+    plt.subplot(2, 1, 1)
+    plt.step(tgrid, Fz_p_opt, '-o', label='Fz_P', where='post')
+    plt.step(tgrid, Fz_p_opt_sig, '-o', label='Fz_P_sig', where='post')
+    plt.xlabel('t')
+    plt.ylabel('u')
+    plt.legend()
+    plt.grid()
+    plt.subplot(2, 1, 2)
+    plt.plot(tgrid, vz_p_opt, '-o', label='vz_P')
+    plt.plot(tgrid, vz_p_opt_sig, '-o', label='vz_P_sig')
+    plt.xlabel('t')
+    plt.ylabel('u')
+    plt.legend()
+    plt.grid()
+    # plt.show()
+
+
+# Initialize the LegKinematics class
+BASE_SH_LEN = 0.2345
+LINK_LENGTH = 0.19
+leg_kinematics = LegKinematics(BASE_SH_LEN, LINK_LENGTH)
+
+# Create a cartesian trajectory for the floating base in the world frame [x, z, theta]
+base_pos_traj = []
+x_g_fixed = - BASE_SH_LEN/2
+for i in range(len(z_g_opt)):
+    base_pos_traj += [[x_g_fixed, z_g_opt[i], 0.0]]
+
+# Create a cartesian trajectory for the foot in the world frame [x, z]
+foot_p_traj = []
+x_p_fixed = - BASE_SH_LEN/2
+for i in range(len(z_p_opt)):
+    foot_p_traj += [[x_p_fixed, z_p_opt[i]]]
+
+# Compute leg joint angles trajectory
+q2_traj , q3_traj = leg_kinematics.compute_Inverse_Kinematics_trajectory(foot_p_trajectory=foot_p_traj, base_pos_trajectory=base_pos_traj)
+
+if PLOT:
+    # Plot the leg joint angles
+    plt.figure(6)
+    plt.subplot(2, 1, 1)
+    plt.plot(tgrid, q2_traj, '-o', label='HIP')
+    plt.xlabel('t')
+    plt.ylabel('rad')
+    plt.legend()
+    plt.grid()
+    plt.subplot(2, 1, 2)
+    plt.plot(tgrid, q3_traj, '-o', label='KNEE')
+    plt.xlabel('t')
+    plt.ylabel('rad')
+    plt.legend()
+    plt.grid()
+    # plt.show()
+
+# Compute required torque
+torque2_traj = [] 
+torque3_traj = []
+external_force = []
+for i in range(len(Fz_p_opt)):
+    external_force += [[0.0, Fz_p_opt[i]]]
+
+torque2_traj, torque3_traj = leg_kinematics.calculate_torque_trajectories(q2_traj, q3_traj, external_force)
+
+if PLOT:
+    # Plot the required joint torque
+    plt.figure(7)
+    plt.subplot(2, 1, 1)
+    plt.plot(tgrid, torque2_traj, '-o', label='HIP')
+    plt.xlabel('t')
+    plt.ylabel('Nm')
+    plt.legend()
+    plt.grid()
+    plt.subplot(2, 1, 2)
+    plt.plot(tgrid, torque3_traj, '-o', label='KNEE')
+    plt.xlabel('t')
+    plt.ylabel('Nm')
+    plt.legend()
+    plt.grid()
+    plt.show()
+
+
+
+
+
+
+
+
+

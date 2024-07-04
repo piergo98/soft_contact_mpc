@@ -175,13 +175,13 @@ class SoftContactMPC:
         Q = 0
         for j in range(self.n_int):
             k1, k1_q = ode(X, U)
-            k2, k2_q = ode(X + self.h/2 * k1, U)
-            k3, k3_q = ode(X + self.h/2 * k2, U)
-            k4, k4_q = ode(X + self.h * k3, U)
-            X = X+self.h/6*(k1 + 2*k2 + 2*k3 + k4)
-            Q = Q + self.h/6*(k1_q + 2*k2_q + 2*k3_q + k4_q)
-            # X = X + self.h*k1
-            # Q = Q + self.h*k1_q
+            # k2, k2_q = ode(X + self.h/2 * k1, U)
+            # k3, k3_q = ode(X + self.h/2 * k2, U)
+            # k4, k4_q = ode(X + self.h * k3, U)
+            # X = X+self.h/6*(k1 + 2*k2 + 2*k3 + k4)
+            # Q = Q + self.h/6*(k1_q + 2*k2_q + 2*k3_q + k4_q)
+            X = X + self.h*k1
+            Q = Q + self.h*k1_q
         self.update_state = ca.Function('update_state', [X0, U], [X, Q], ['x0', 'u0'], ['xf', 'qf'])
         
     def init_values(self, x0, u0):
