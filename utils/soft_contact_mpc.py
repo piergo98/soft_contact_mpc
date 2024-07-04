@@ -315,7 +315,7 @@ class SoftContactMPC:
         }
                 
         opts = {
-            'ipopt.max_iter': 5e2,
+            'ipopt.max_iter': 5e3,
             # 'ipopt.gradient_approximation': 'finite-difference-values',
             # 'ipopt.hessian_approximation': 'limited-memory', 
             # 'ipopt.hsllib': "/usr/local/libhsl.so",

@@ -13,14 +13,14 @@ params = {
     'width': 0.3,  # width
     'height': 0.38,  # height
     'leg_length': 0.295,  # leg length
-    'dmin': 0.03,  # minimum distance
+    'dmin': 0.01,  # minimum distance
     'l_box': 0.002,  # box length
     'gamma': 100.0,  # penalty on the distance
     'gamma_v': 100.0,  # penalty on the velocity
 }
 
 # Define the initial state
-x0 = np.array([0.05, -0.0075, 0.0])
+x0 = np.array([0.02, -0.0075, 0.0])
 
 # Define the initial control input
 u0 = np.array([20.0, 0.0])
@@ -31,7 +31,7 @@ xd = np.array([1.5, 1.0, 0.0])
 # Define the MPC parameters
 n_states = 3
 n_controls = 2
-n_horizon = 10
+n_horizon = 100
 time_horizon = 0.5
 
 soft_contact_mpc = SoftContactMPC(x0, u0, n_states, n_controls, n_horizon, time_horizon, n_int=1)
