@@ -1,1 +1,5 @@
 .SIG_ILC_planner_SOFTLEG_salto.py
+utils/__pycache__/__init__.cpython-310.pyc
+utils/__pycache__/leg_kinematics.cpython-310.pyc
+utils/__pycache__/soft_contact_mpc.cpython-310.pyc
+utils/__pycache__/soft_contact_mpc.cpython-310.pyc
