@@ -23,7 +23,7 @@ class LegKinematics:
         Returns:
             tuple: The computed angles (q2, q3) for the hip and knee.
         """
-        base_to_sh = np.array([self.BASE_SH_LEN, 0.0])
+        base_to_sh = np.array([-self.BASE_SH_LEN/2, 0.0])
         
         # Front legs
         foot_pos = np.array(foot_p[:2])
@@ -34,12 +34,12 @@ class LegKinematics:
         R_l_w = np.array([[np.cos(theta), np.sin(theta)],
                           [-np.sin(theta), np.cos(theta)]])
         
-        sh_pos_l = foot_pos - (base_pos_w + R_l_w.dot(base_to_sh))
+        sh_pos_l = -foot_pos + (base_pos_w + R_l_w.dot(base_to_sh))
         sh_pos_l = np.array([-sh_pos_l[1], -sh_pos_l[0]])  # IMPORTANTISSIMO PER MULINEX
         d = (sh_pos_l[0]**2 + sh_pos_l[1]**2 - 2*(self.LINK_LENGTH**2)) / (2*(self.LINK_LENGTH**2))
 
         # Hip and knee computation
-        q3 = np.arctan2(-np.sqrt(1 - d**2), d)
+        q3 = np.arctan2(np.sqrt(1 - d**2), d)
         q2 = np.arctan2(sh_pos_l[0], -sh_pos_l[1]) - np.arctan2(self.LINK_LENGTH*np.sin(q3), self.LINK_LENGTH + self.LINK_LENGTH*np.cos(q3))
 
         return q2, q3
