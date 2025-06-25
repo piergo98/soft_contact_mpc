@@ -1,5 +1,6 @@
 import casadi as ca
 import numpy as np
+import csv
 
 class SoftContactMPC:
     class Constraint():
@@ -58,8 +59,10 @@ class SoftContactMPC:
                 Gain parameter.
                 
         Returns:
-            float
-                Output value of the sigmoid function.
+            Sigmoid: casadi.Function
+                Sigmoid function.
+            Sigmoid_V: casadi.Function
+                Sigmoid function for velocity.
         """
         # Contact activation function
         z = ca.SX.sym('z')
@@ -193,7 +196,7 @@ class SoftContactMPC:
         w0 += x0.tolist()
         x0_k = x0
         u0_k = u0.tolist()
-        print(f"u0_k: {u0_k}")
+
         z0_g = []  
         z0_p = []
         Fz_p0 = []
@@ -376,6 +379,29 @@ class SoftContactMPC:
             
 
         return z_g_opt, z_p_opt, vz_g_opt, Fz_p_opt, vz_p_opt, Fz_p_opt_sig, vz_p_opt_sig
+
+
+    def write_to_csv(self, csv_name, q2_traj, q3_traj, torque2_traj, torque3_traj):
+        """
+        Writes the trajectories and torques for joints 2 and 3 into a CSV file.
+
+        Args:
+            csv_name: str
+                The name of the CSV file to write to.
+            q2_traj: list
+                The trajectory of joint 2.
+            q3_traj: list
+                The trajectory of joint 3.
+            torque2_traj: list
+                The torque trajectory of joint 2.
+            torque3_traj: list
+                The torque trajectory of joint 3.
+        """
+        with open(csv_name, 'w', newline='') as file:
+            writer = csv.writer(file)
+            writer.writerow(["q2", "q3", "torque2", "torque3"])  # Writing the header
+            for q2, q3, torque2, torque3 in zip(q2_traj, q3_traj, torque2_traj, torque3_traj):
+                writer.writerow([q2, q3, torque2, torque3])
     
     def step(self, x0, u0):
         """

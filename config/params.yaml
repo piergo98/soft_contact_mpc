@@ -1,0 +1,10 @@
+'m': 1.5,  # mass
+'I': 0.35,  # moment of inertia
+'length': 0.235,  # length
+'width': 0.3,  # width
+'height': 0.38,  # height
+'leg_length': 0.295,  # leg length
+'dmin': 0.01,  # minimum distance
+'l_box': 0.002,  # box length
+'gamma': 100.0,  # penalty on the distance
+'gamma_v': 100.0,  # penalty on the velocity

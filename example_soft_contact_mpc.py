@@ -1,26 +1,18 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from utils.soft_contact_mpc import SoftContactMPC
-from utils.leg_kinematics import LegKinematics
+from Sig_ILC.sigmpc.soft_contact_mpc.utils.models.leg_kinematics import LegKinematics
+import yaml
 
 PLOT = True
 
 # Define the system parameters
-params = {
-    'm': 1.5,  # mass
-    'I': 0.35,  # moment of inertia
-    'length': 0.235,  # length
-    'width': 0.3,  # width
-    'height': 0.38,  # height
-    'leg_length': 0.295,  # leg length
-    'dmin': 0.01,  # minimum distance
-    'l_box': 0.002,  # box length
-    'gamma': 100.0,  # penalty on the distance
-    'gamma_v': 100.0,  # penalty on the velocity
-}
+# Load system parameters from YAML file
+with open('config/params.yaml', 'r') as file:
+    params = yaml.safe_load(file)
 
 # Define the initial state
-x0 = np.array([0.02, -0.0075, 0.0])
+x0 = np.array([0.03, -0.0075, 0.0])
 
 # Define the initial control input
 u0 = np.array([20.0, 0.0])
@@ -31,15 +23,15 @@ xd = np.array([1.5, 1.0, 0.0])
 # Define the MPC parameters
 n_states = 3
 n_controls = 2
-n_horizon = 100
-time_horizon = 0.5
+n_horizon = 200
+time_horizon = 1.0
 
 soft_contact_mpc = SoftContactMPC(x0, u0, n_states, n_controls, n_horizon, time_horizon, n_int=1)
 
 # Set bounds for the optimization variables
 # Bound controls
 v_bw = 10.0
-f_bw = 100.0
+f_bw = 300.0
 lbu = np.array([-f_bw, -v_bw])
 ubu = np.array([f_bw, v_bw])
 soft_contact_mpc.set_bounds_u(lbu, ubu)
@@ -214,7 +206,7 @@ torque2_traj = []
 torque3_traj = []
 external_force = []
 for i in range(len(Fz_p_opt)):
-    external_force += [[0.0, Fz_p_opt[i]]]
+    external_force += [[0.0, -Fz_p_opt[i]]]
 
 torque2_traj, torque3_traj = leg_kinematics.calculate_torque_trajectories(q2_traj, q3_traj, external_force)
 
@@ -234,6 +226,11 @@ if PLOT:
     plt.legend()
     plt.grid()
     plt.show()
+
+# Save the results
+file_name = 'results/soft_contact_mpc.csv'
+soft_contact_mpc.write_to_csv(file_name, q2_traj, q3_traj, torque2_traj, torque3_traj)
+
 
 
 
