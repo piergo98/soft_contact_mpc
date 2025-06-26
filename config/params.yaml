@@ -13,19 +13,3 @@ model:
   w_box: 0.3,           # box width
   gamma: 100.0,         # penalty on the distance
   gamma_v: 100.0,       # penalty on the velocity
-
-cost:
-  k_force: 0.1,         # force cost
-  k_vel: 0.1,           # vel cost
-  k_pos: 0.1,           # pos cost
-  alpha: 0.0,           # x terminal cost
-  beta: 0.0,            # z terminal cost
-  gamma: 0.0,           # theta terminal cost
-
-
-solver:
-  ipopt:
-    max_iter: 100,        # maximum iterations
-    tol: 1e-6,            # tolerance
-    acceptable_tol: 1e-4, # acceptable tolerance
-    print_level: 0,       # print level

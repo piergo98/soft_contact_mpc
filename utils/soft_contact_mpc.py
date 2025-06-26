@@ -14,7 +14,7 @@ class SoftContactMPC:
         # Load the model
         self.model = model
         
-    def set_up_problem(self, params):
+    def set_up_problem(self, params, **kwargs):
         """
         This method is used to set up the optimization problem.
         Args:
@@ -35,26 +35,78 @@ class SoftContactMPC:
         
         self.n_opti = (self.model.n_states + self.model.n_controls) * (self.N) + self.model.n_states
         
+        # Set initial state and control input
+        self.x0 = params['initial_state']
+        self.u0 = params['initial_control']
+        
         # Define symbolic variables for the computations
         self.x = ca.SX.sym('x', self.model.n_states)
         self.u = ca.SX.sym('u', self.model.n_controls)
         
-        # Define the symbolic variables used for the optimization
-        self.state = [ca.SX.sym("X_0", self.model.n_states)]
-        self.inputs = []
-        self.opt_var = self.state.copy()
-        for i in range(self.N):
-            self.inputs += [ca.SX.sym(f"U_{i}", self.model.n_controls)]
-            self.state += [ca.SX.sym(f"X_{i+1}", self.model.n_states)]
-            self.opt_var += [self.inputs[i], self.state[i+1]]
-                
-        # self.opt_var_0 = self.init_values(x0, u0)
+        # Default values
+        self.h_step = 0.0
+        self.x_step = 0.0
+        self.step = 0.0
+        epsilon = 0
+            
+        for key, value in kwargs.items():
+            print(f"Setting {key} to {value}")
+            if key == 'h_t':
+                self.h_step = value
+            elif key == 'x_t':
+                self.x_step = value
+                epsilon = 0.3
+            elif key == 'x_motion':
+                self.x_step = value
+            else:
+                self.x_step = 1.0
         
-        self.lb_opt_var = - np.ones(self.n_opti) * np.inf
-        self.ub_opt_var =   np.ones(self.n_opti) * np.inf
+        # Desired final state
+        x_fin = self.x0[0] + self.x_step + epsilon
+        y_fin = self.x0[1] + self.h_step
+        self.x_des = np.array([x_fin, y_fin, 0.0, x_fin+self.model.l3, self.h_step, x_fin-self.model.l3, self.h_step, 0.0, 0.0, 0.0]).reshape(-1, 1)
         
+        # Vector centers for obstacle avoidance            
+        self.r_c = 0.03     # Radius contact points in m
+        self.r_ob = 0.01    # Radius obstacle circles in m
+        self.nc_ob = int(self.h_step/(2*self.r_ob) + 1)   # number of collision circle needed
+        self.C_OB = []
+        for index in range(self.nc_ob):
+            self.C_OB += [[self.x_step, index*2*self.r_ob]]
+        
+        print('Setting up optimization problem:')
+        
+        # Empty NLP
+        self.w = []
+        self.w0 = []
+        self.lbw = []
+        self.ubw = []
         self.cost = 0
         self.constraints = []
+        self.lbconstr = []
+        self.ubconstr = []
+            
+        # Initial state contraint
+        self.Xk = ca.SX.sym('X0', self.model.n_states)
+        self.w += [self.Xk]
+        self.lbw += self.x0
+        self.ubw += self.x0
+        self.w0 += self.x0
+        self.w0 += self.u0
+        
+        # Set all the methods for the optimization problem
+        self.terrain(slope=params['slope'])
+        self.integrator()
+        
+        for i in range(self.N):
+            self.set_control_constraints(i, params)
+            self.multiple_shooting(i, params)
+            self.set_bounding_box(i)
+            
+        self.set_terminal_cost()
+        
+        # Set the initial guess for the optimization variables
+        self.set_initial_guess()
     
     def terrain(self, slope=0.0):
         """
@@ -132,12 +184,10 @@ class SoftContactMPC:
             Q = Q + self.h*k1_q
         self.update_state = ca.Function('update_state', 
                                         [X0, U], 
-                                        [X, Q], 
-                                        ['x0', 'u0'], 
-                                        ['xf', 'qf']
+                                        [X, Q],
                                     )
                 
-    def init_values(self, x0, u0):
+    def set_initial_guess(self, x0, u0):
         """
         This method is used to define the initial values of the optimization variables.
         """    
@@ -179,21 +229,19 @@ class SoftContactMPC:
         
         return w0, z0_g, z0_p, Fz_p0, vz_p0, terrain
     
-    def set_bounds_x(self, inputs_lb, inputs_ub):
+    def set_bounds_x(self, states_lb, states_ub):
         """
         This method is used to set the bounds of the state variables.
         """
-        for i in range(self.N):
-            self.lb_opt_var[i*(self.model.n_states+self.model.n_controls):i*(self.model.n_states+self.model.n_controls)+self.model.n_states] = inputs_lb
-            self.ub_opt_var[i*(self.model.n_states+self.model.n_controls):i*(self.model.n_states+self.model.n_controls)+self.model.n_states] = inputs_ub
+        self.lbw += states_lb
+        self.ubw += states_ub
         
     def set_bounds_u(self, inputs_lb, inputs_ub):
         """
         This method is used to set the bounds of the control input variables.
         """
-        for i in range(self.N):
-            self.lb_opt_var[i*(self.model.n_states+self.model.n_controls)+self.model.n_states:i*(self.model.n_states+self.model.n_controls)+self.model.n_states+self.model.n_controls] = inputs_lb
-            self.ub_opt_var[i*(self.model.n_states+self.model.n_controls)+self.model.n_states:i*(self.model.n_states+self.model.n_controls)+self.model.n_states+self.model.n_controls] = inputs_ub
+        self.lbw += inputs_lb
+        self.ubw += inputs_ub
         
     def add_constraint(self, g, lbg, ubg, name=None):
         """
@@ -224,24 +272,127 @@ class SoftContactMPC:
             
         raise ValueError(f"Constraint {name} not found.")
     
-    def multiple_shooting(self):
+    def multiple_shooting(self, i, params) -> None:
         """
         This method is used to define the multiple shooting constraint of the optimization problem.
         """
-        for i in range(self.N):
-            F = self.update_state(x0=self.state[i], u0=self.inputs[i])
-            Xk_end = F['xf']
-            self.cost += F['qf']
-            
-            # Continuity constraint
-            self.add_constraint(
-                g=[Xk_end - self.state[i+1]],
-                lbg=np.zeros(self.model.n_states),
-                ubg=np.zeros(self.model.n_states),
-                name=f"Multiple shooting {i}",
-            )
+        x_next, J_next = self.update_state(x0=self.state[i], u0=self.inputs[i])
+        self.cost += J_next
+        
+        self.Xk = ca.SX.sym(f"X_{i+1}", self.model.n_states)
+        self.w += [self.Xk]
+        self.set_bounds_x(params['state_lower_bound'], params['state_upper_bound'])
+        
+        
+        # Continuity constraint
+        self.add_constraint(
+            g=[self.Xk - x_next],
+            lbg=np.zeros(self.model.n_states),
+            ubg=np.zeros(self.model.n_states),
+            name=f"Multiple shooting {i}",
+        )
     
-    def set_terminal_cost(self, xdes, gains):
+    def set_control_constraints(self, i, params) -> None:
+        """
+        This method is used to set the control constraints of the optimization problem.
+        
+        Args:
+            i: int
+                Index of the control input.
+            u_lb: np.array
+                Lower bound of the control input.
+            u_ub: np.array
+                Upper bound of the control input.
+        """
+        self.Uk = ca.SX.sym(f"U_{i}", self.model.n_controls)
+        self.w += [self.Uk]
+        self.set_bounds_u(params['input_lower_bound'], params['input_upper_bound'])
+        
+        # Friction cone constraints
+        for k in range(self.model.n_feet):
+            # Contact force components
+            # Get components of the force
+            fx = self.Uk[3*k]  # Force in x direction
+            fy = self.Uk[3*k + 1]  # Force in y direction
+            fz = self.Uk[3*k + 2]  # Force in z direction (normal force)
+
+            # Friction cone constraint: sqrt(fx^2 + fy^2) <= mu * fz
+            # This ensures the tangential forces don't exceed friction limit
+            tangential_force = ca.sqrt(fx**2 + fy**2)
+            normal_force = fz
+            
+            # Add friction cone constraint
+            self.add_constraint(
+                g=[tangential_force - self.model.friction * normal_force],
+                lbg=[-ca.inf],
+                ubg=[0],
+                name=f"Friction cone {k}"
+            )
+        
+        # Force can only push, not pull (normal force must be positive)
+        # self.add_constraint(
+        #     g=[normal_force],
+        #     lbg=[0],
+        #     ubg=[ca.inf],
+        #     name=f"Normal force {i}"
+        # )
+        
+    def set_bounding_box(self, i) -> None:
+        """
+        This method is used to set the bounding box constraints of the optimization problem.
+        
+        Args:
+            i: int
+                Index of the control input.
+        """
+        # Extract the feet position from the state
+        # Extract feet positions from the state
+        # Each foot has 3 components (x, y, z)
+        r = self.Xk[0:3]         # CoM position
+        q = self.Xk[3:7]         # CoM orientation (quaternion)
+        p1 = self.Xk[13:16]      # First foot position
+        p2 = self.Xk[16:19]      # Second foot position
+        p3 = self.Xk[19:22]      # Third foot position
+        p4 = self.Xk[22:25]      # Fourth foot position
+        
+        R = self.model.quat_to_rot(q)  # Convert quaternion to rotation matrix
+        
+        for k, p in enumerate([p1, p2, p3, p4]):
+            # Bounding box constraints for each foot
+            # Assuming the bounding box is a square with side length 0.1 centered at the foot position
+            self.add_constraint(
+                g=[ca.transpose(R) @ (p - r)],
+                lbg=[-self.model.l_box, -self.model.w_box, -self.model.h_box],
+                ubg=[self.model.l_box, self.model.w_box, self.model.h_box],
+                name=f"Bounding box foot {k+1}"
+            )
+            
+    def set_obstacle_avoidance(self, i, params):
+        """
+        This method is used to set the obstacle avoidance constraints of the optimization problem.
+        
+        Args:
+            i: int
+                Index of the control input.
+            params: dict
+                Dictionary containing the parameters of the optimization problem.
+        """
+        # Obstacle avoidance constraints
+        if self.h_step != 0.0 and self.x_step != 0.0:
+            for j in range(self.nc_ob):
+                x_ob = self.C_OB[j][0]
+                y_ob = self.C_OB[j][1]
+                # Distance from the contact point to the obstacle center
+                distance = ca.sqrt((self.state[i][0] - x_ob)**2 + (self.state[i][1] - y_ob)**2)
+                # Constraint: distance >= r_c + r_ob
+                self.add_constraint(
+                    g=[distance - (self.r_c + self.r_ob)],
+                    lbg=[0],
+                    ubg=[ca.inf],
+                    name=f"Obstacle avoidance {i}_{j}"
+                )
+        
+    def set_terminal_cost(self, gains) -> None:
         """
         This method is used to set the terminal cost of the optimization problem.
         
@@ -251,7 +402,9 @@ class SoftContactMPC:
             gains: dict
                 Dictionary containing the gains of the terminal cost.
         """
-        self.cost += gains['alpha']*(self.state[-1][0] - xdes[0])**2 + gains['beta']*(self.state[-1][1] - xdes[1])**2 + gains['gamma']*(self.state[-1][2] - xdes[2])**2    
+        self.cost += gains['alpha']*(self.state[-1][0] - self.xdes[0])**2 \
+                + gains['beta']*(self.state[-1][1] - self.xdes[1])**2 \
+                + gains['gamma']*(self.state[-1][2] - self.xdes[2])**2    
     
     def create_solver(self, params):
         """
@@ -363,7 +516,7 @@ class SoftContactMPC:
             u0: np.array
                 Initial control input.
         """
-        self.init_values(x0, u0)
+        self.set_initial_guess(x0, u0)
         
         self.create_solver()
         

@@ -11,6 +11,7 @@ class SingleRigidBody3D:
 
     n_states = 25  # (r, q, v, omega, p1, p2, p3, p4)
     n_controls = 24  # (F_1, F_2, F_3, F_4, v_1, v_2, v_3, v_4)
+    n_feet = 4  # Number of feet
     g = np.array([0, 0, 9.81])  # Gravity vector in 3D
     friction = 0.6
 
