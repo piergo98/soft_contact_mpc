@@ -8,9 +8,9 @@ from numbers import Number
 class SingleRigidBody3D:
     # Class for a 3D Single Rigid Body model with feet.
 
-    n_states = 18  # Increased for 3D (x, y, z, roll, pitch, yaw, foot positions, velocities)
-    n_controls = 12  # Increased for 3D forces and velocities
-    g = 9.81
+    n_states = 25  # (r, q, v, omega, p1, p2, p3, p4)
+    n_controls = 24  # (F_1, F_2, F_3, F_4, v_1, v_2, v_3, v_4)
+    g = np.array([0, 0, 9.81])  # Gravity vector in 3D
     friction = 0.6
 
     def __init__(self, 
@@ -24,7 +24,10 @@ class SingleRigidBody3D:
                 box_width:                      float,
                 box_height:                     float,
                 minimum_distance_h:             float,
-                minimum_foot2hip_dist:          float) -> None:
+                minimum_foot2hip_dist:          float,
+                gamma:                          float,
+                gamma_v:                        float,
+                ) -> None:
 
         self.m = mass
         self.I = inertia_tensor  # 3x3 inertia tensor
@@ -37,213 +40,162 @@ class SingleRigidBody3D:
         self.h_box = box_height
         self.dmin = minimum_distance_h
         self.min_f2h_dist = minimum_foot2hip_dist
+        self.gamma = gamma
+        self.gamma_v = gamma_v
+        
+        self.sigmoid, self.sigmoid_v = self.sigmoid_function(self.gamma, self.gamma_v)
 
         self.IK_front = self.inverse_kinematics(leg='F')
         self.IK_hind = self.inverse_kinematics(leg='H')
-
-    def stance_dynamics(self, x_cartesian: ca.SX, u: ca.SX):
+        
+    def rigid_body_dynamics(self, h_terrain: ca.Function):
         """
-        3D Stance dynamics in Cartesian coordinates.
+        3D Rigid body dynamics in Cartesian coordinates.
 
         Args:
-            x_cartesian (ca.SX): Cartesian state.
-            u           (ca.SX): Control input.
+            h_terrain (ca.Function): Function to compute terrain height at x position.
 
         Returns:
             ca.SX: State derivative.
         """
-        x, y, z, roll, pitch, yaw, x_f, y_f, z_f, x_h, y_h, z_h, x_dot, y_dot, z_dot, roll_dot, pitch_dot, yaw_dot = ca.vertsplit(x_cartesian)
-        F_xf, F_yf, F_zf, F_xh, F_yh, F_zh, v_xf, v_yf, v_zf, v_xh, v_yh, v_zh = ca.vertsplit(u)
+        # Define symbolic variables for state and control input
+        x_cartesian = ca.SX.sym('x_cartesian', self.n_states)  # State vector in Cartesian coordinates
+        u = ca.SX.sym('u', self.n_controls)  # Control input vector
         
-        # Foot positions are fixed in stance
-        x_f_dot = 0
-        y_f_dot = 0
-        z_f_dot = 0
-        x_h_dot = 0
-        y_h_dot = 0
-        z_h_dot = 0
+        # Position and orientation
+        x, y, z = ca.vertsplit(x_cartesian[:3])                         # Position of CoM in inertial frame
+        r = ca.vertcat(x, y, z)                                         # Position vector
+        qw, qx, qy, qz = ca.vertsplit(x_cartesian[3:7])                 # Quaternion orientation [w, x, y, z]
+        q = ca.vertcat(qw, qx, qy, qz)                                  # Quaternion vector
         
-        # Linear accelerations
-        x_ddot = (F_xf + F_xh) / self.m
-        y_ddot = (F_yf + F_yh) / self.m
-        z_ddot = (F_zf + F_zh) / self.m - self.g
+        # Linear and angular velocities
+        v_x, v_y, v_z = ca.vertsplit(x_cartesian[7:10])                 # Linear velocity
+        v = ca.vertcat(v_x, v_y, v_z)                                   # Linear velocity vector
+        omega_x, omega_y, omega_z = ca.vertsplit(x_cartesian[10:13])    # Angular velocity
+        omega = ca.vertcat(omega_x, omega_y, omega_z)                   # Angular velocity vector
         
-        # Calculate moment arms
-        r_f = ca.vertcat(x_f - x, y_f - y, z_f - z)
-        r_h = ca.vertcat(x_h - x, y_h - y, z_h - z)
+        # Foot positions (assuming 4 feet in 3D model)
+        p1x, p1y, p1z = ca.vertsplit(x_cartesian[13:16])                # Foot 1 (LF)
+        p1 = ca.vertcat(p1x, p1y, p1z)                                  # Foot 1 position vector (LF)
+        p2x, p2y, p2z = ca.vertsplit(x_cartesian[16:19])                # Foot 2 (RF)
+        p2 = ca.vertcat(p2x, p2y, p2z)                                  # Foot 2 position vector (RF)
+        p3x, p3y, p3z = ca.vertsplit(x_cartesian[19:22])                # Foot 3 (LH) 
+        p3 = ca.vertcat(p3x, p3y, p3z)                                  # Foot 3 position vector (LH)
+        p4x, p4y, p4z = ca.vertsplit(x_cartesian[22:25])                # Foot 4 (RH)
+        p4 = ca.vertcat(p4x, p4y, p4z)                                  # Foot 4 position vector (RH)
         
-        # Force vectors
-        F_f = ca.vertcat(F_xf, F_yf, F_zf)
-        F_h = ca.vertcat(F_xh, F_yh, F_zh)
+        # Normalize quaternion to prevent drift during integration (optional but good practice)
+        norm_q = ca.norm_2(q)
+        if norm_q > 0:
+            q = q / norm_q
         
-        # Calculate torques (cross products)
-        tau_f = ca.cross(r_f, F_f)
-        tau_h = ca.cross(r_h, F_h)
+        # Extract contact forces from u
+        F_x1, F_y1, F_z1 = ca.vertsplit(u[:3])                          # Force on foot 1 (LF) 
+        F_1 = ca.vertcat(
+            self.sigmoid(h_terrain(p1x) - p1z)*F_x1, 
+            self.sigmoid(h_terrain(p1x) - p1z)*F_y1, 
+            self.sigmoid(h_terrain(p1x) - p1z)*F_z1
+        )                                                               # Force vector for foot 1 (LF)
+        F_x2, F_y2, F_z2 = ca.vertsplit(u[3:6])                         # Force on foot 2 (RF)
+        F_2 = ca.vertcat(
+            self.sigmoid(h_terrain(p2x) - p2z)*F_x2, 
+            self.sigmoid(h_terrain(p2x) - p2z)*F_y2, 
+            self.sigmoid(h_terrain(p2x) - p2z)*F_z2
+        )                                                               # Force vector for foot 2 (RF)
+        F_x3, F_y3, F_z3 = ca.vertsplit(u[6:9])                         # Force on foot 3 (LH)
+        F_3 = ca.vertcat(
+            self.sigmoid(h_terrain(p3x) - p3z)*F_x3, 
+            self.sigmoid(h_terrain(p3x) - p3z)*F_y3, 
+            self.sigmoid(h_terrain(p3x) - p3z)*F_z3
+        )                                                               # Force vector for foot 3 (LH)
+        F_x4, F_y4, F_z4 = ca.vertsplit(u[9:12])                        # Force on foot 4 (RH)
+        F_4 = ca.vertcat(
+            self.sigmoid(h_terrain(p4x) - p4z)*F_x4, 
+            self.sigmoid(h_terrain(p4x) - p4z)*F_y4, 
+            self.sigmoid(h_terrain(p4x) - p4z)*F_z4
+        )                                                               # Force vector for foot 4 (RH)
         
-        # Total torque
-        tau_total = tau_f + tau_h
+        # Extract foot velocities from u
+        v_x1, v_y1, v_z1 = ca.vertsplit(u[12:15])                       # Velocity of foot 1 (LF)
+        v_1 = ca.vertcat(
+            self.sigmoid_v(-h_terrain(p1x) + p1z)*v_x1, 
+            self.sigmoid_v(-h_terrain(p1x) + p1z)*v_y1, 
+            self.sigmoid_v(-h_terrain(p1x) + p1z)*v_z1
+        )                                                               # Velocity vector for foot 1 (LF)
+        v_x2, v_y2, v_z2 = ca.vertsplit(u[15:18])                       # Velocity of foot 2 (RF)
+        v_2 = ca.vertcat(
+            self.sigmoid_v(-h_terrain(p2x) + p2z)*v_x2, 
+            self.sigmoid_v(-h_terrain(p2x) + p2z)*v_y2, 
+            self.sigmoid_v(-h_terrain(p2x) + p2z)*v_z2
+        )                                                               # Velocity vector for foot 2 (RF)
+        v_x3, v_y3, v_z3 = ca.vertsplit(u[18:21])                       # Velocity of foot 3 (LH)
+        v_3 = ca.vertcat(
+            self.sigmoid_v(-h_terrain(p3x) + p3z)*v_x3, 
+            self.sigmoid_v(-h_terrain(p3x) + p3z)*v_y3, 
+            self.sigmoid_v(-h_terrain(p3x) + p3z)*v_z3
+        )                                                               # Velocity vector for foot 3 (LH)
+        v_x4, v_y4, v_z4 = ca.vertsplit(u[21:24])                       # Velocity of foot 4 (RH)
+        v_4 = ca.vertcat(
+            self.sigmoid_v(-h_terrain(p4x) + p4z)*v_x4, 
+            self.sigmoid_v(-h_terrain(p4x) + p4z)*v_y4, 
+            self.sigmoid_v(-h_terrain(p4x) + p4z)*v_z4
+        )                                                               # Velocity vector for foot 4 (RH)
         
-        # Angular accelerations (simplified - assuming diagonal inertia tensor)
-        roll_ddot = tau_total[0] / self.I[0, 0]
-        pitch_ddot = tau_total[1] / self.I[1, 1]
-        yaw_ddot = tau_total[2] / self.I[2, 2]
-
-        return ca.vertcat(
-            x_dot, y_dot, z_dot, roll_dot, pitch_dot, yaw_dot,
-            x_f_dot, y_f_dot, z_f_dot, x_h_dot, y_h_dot, z_h_dot,
-            x_ddot, y_ddot, z_ddot, roll_ddot, pitch_ddot, yaw_ddot
+        
+        # --- Kinematics ---
+        dp = v  # Rate of change of position is linear velocity
+        
+        dq = self.quat_dot(q, omega)  # Quaternion derivative
+        
+        # --- Dynamics ---
+        # Linear Dynamics: Newton's Second Law
+        F_tot = F_1 + F_2 + F_3 + F_4  # Total force from all feet
+        dv = (F_tot / self.m) - self.g  # Linear acceleration (gravity included)
+        
+        # Angular Dynamics: Euler's Equations
+        # Convert orientation quaternion to rotation matrix (body to inertial)
+        R_wb = self.quat_to_rot_matrix(q)
+        
+        # Add torques from each foot
+        F = [F_1, F_2, F_3, F_4]
+        Tau_total_body = ca.SX.zeros(3)  # Initialize total torque vector
+        for i, p in enumerate([p1, p2, p3, p4]):
+            # Calculate torque for each foot
+            r_i = p - r
+            # Check 3D vectors
+            if r_i.shape[0] != 3 or F[i].shape[0] != 3:
+                raise ValueError(f"Cross product requires 3D vectors, got shapes {r_i.shape} and {F[i].shape}")
+            tau_contact_inertial = ca.cross(r_i, F[i])  # Torque = r x F
+            # Convert torque to body frame
+            tau_contact_body = ca.transpose(R_wb) @ tau_contact_inertial
+            Tau_total_body += tau_contact_body  # Sum torques from all feet
+            
+        # Calculate angular acceleration (Euler's equation)
+        # I * d(omega)/dt + omega x (I * omega) = Tau_total_body
+        # d(omega)/dt = I_inv * (Tau_total_body - omega x (I * omega))
+        
+        # Check 3D vectors
+        if omega.shape[0] != 3 or (self.I @ omega).shape[0] != 3:
+            raise ValueError(f"Cross product requires 3D vectors, got shapes {omega.shape} and {(self.I @ omega).shape}")
+        domega = np.linalg.inv(self.I) @ (Tau_total_body - ca.cross(omega, self.I @ omega))
+        
+        dxdt = ca.vertcat(
+            dp,         # Linear velocity
+            dq,         # Quaternion derivative
+            dv,         # Linear acceleration
+            domega,     # Angular acceleration
+            v_1,        # Foot 1 velocity (LF)
+            v_2,        # Foot 2 velocity (RF)
+            v_3,        # Foot 3 velocity (LH)
+            v_4,        # Foot 4 velocity (RH)
         )
         
-    def push_dynamics(self, x_cartesian: ca.SX, u: ca.SX):
-        """
-        3D Push dynamics in Cartesian coordinates.
-
-        Args:
-            x_cartesian (ca.SX): Cartesian state
-            u           (ca.SX): Control input
-
-        Returns:
-            ca.SX: State derivative
-        """
-        x, y, z, roll, pitch, yaw, x_f, y_f, z_f, x_h, y_h, z_h, x_dot, y_dot, z_dot, roll_dot, pitch_dot, yaw_dot = ca.vertsplit(x_cartesian)
-        F_xf, F_yf, F_zf, F_xh, F_yh, F_zh, v_xf, v_yf, v_zf, v_xh, v_yh, v_zh = ca.vertsplit(u)
-
-        # Rotation matrix from body to world frame (simplified)
-        R = self.rotation_matrix(roll, pitch, yaw)
-        
-        # Front foot can move (push)
-        foot_vel_world = ca.mtimes(R, ca.vertcat(v_xf, v_yf, v_zf))
-        omega = ca.vertcat(roll_dot, pitch_dot, yaw_dot)
-        r_f = ca.vertcat(x_f - x, y_f - y, z_f - z)
-        
-        x_f_dot = x_dot + foot_vel_world[0] - ca.cross(omega, r_f)[0]
-        y_f_dot = y_dot + foot_vel_world[1] - ca.cross(omega, r_f)[1]
-        z_f_dot = z_dot + foot_vel_world[2] - ca.cross(omega, r_f)[2]
-        
-        # Hind foot is fixed
-        x_h_dot = 0
-        y_h_dot = 0
-        z_h_dot = 0
-        
-        # Linear accelerations
-        x_ddot = F_xh / self.m
-        y_ddot = F_yh / self.m
-        z_ddot = F_zh / self.m - self.g
-        
-        # Calculate moment arm and torque for hind foot
-        r_h = ca.vertcat(x_h - x, y_h - y, z_h - z)
-        F_h = ca.vertcat(F_xh, F_yh, F_zh)
-        tau_h = ca.cross(r_h, F_h)
-        
-        # Angular accelerations
-        roll_ddot = tau_h[0] / self.I[0, 0]
-        pitch_ddot = tau_h[1] / self.I[1, 1]
-        yaw_ddot = tau_h[2] / self.I[2, 2]
-
-        return ca.vertcat(
-            x_dot, y_dot, z_dot, roll_dot, pitch_dot, yaw_dot,
-            x_f_dot, y_f_dot, z_f_dot, x_h_dot, y_h_dot, z_h_dot,
-            x_ddot, y_ddot, z_ddot, roll_ddot, pitch_ddot, yaw_ddot
-        )
-
-    def flight_dynamics(self, x_cartesian: ca.SX, u: ca.SX):
-        """
-        3D Flight dynamics in Cartesian coordinates.
-
-        Args:
-            x_cartesian (ca.SX): Cartesian state
-            u           (ca.SX): Control input
-
-        Returns:
-            ca.SX: State derivative
-        """
-        x, y, z, roll, pitch, yaw, x_f, y_f, z_f, x_h, y_h, z_h, x_dot, y_dot, z_dot, roll_dot, pitch_dot, yaw_dot = ca.vertsplit(x_cartesian)
-        F_xf, F_yf, F_zf, F_xh, F_yh, F_zh, v_xf, v_yf, v_zf, v_xh, v_yh, v_zh = ca.vertsplit(u)
-
-        # Rotation matrix
-        R = self.rotation_matrix(roll, pitch, yaw)
-        omega = ca.vertcat(roll_dot, pitch_dot, yaw_dot)
-        
-        # Both feet can move in flight
-        r_f = ca.vertcat(x_f - x, y_f - y, z_f - z)
-        r_h = ca.vertcat(x_h - x, y_h - y, z_h - z)
-        
-        foot_vel_f = ca.mtimes(R, ca.vertcat(v_xf, v_yf, v_zf))
-        foot_vel_h = ca.mtimes(R, ca.vertcat(v_xh, v_yh, v_zh))
-        
-        x_f_dot = x_dot + foot_vel_f[0] - ca.cross(omega, r_f)[0]
-        y_f_dot = y_dot + foot_vel_f[1] - ca.cross(omega, r_f)[1]
-        z_f_dot = z_dot + foot_vel_f[2] - ca.cross(omega, r_f)[2]
-        
-        x_h_dot = x_dot + foot_vel_h[0] - ca.cross(omega, r_h)[0]
-        y_h_dot = y_dot + foot_vel_h[1] - ca.cross(omega, r_h)[1]
-        z_h_dot = z_dot + foot_vel_h[2] - ca.cross(omega, r_h)[2]
-        
-        # In flight, only gravity acts on the body
-        x_ddot = 0.0
-        y_ddot = 0.0
-        z_ddot = -self.g
-        
-        # No external torques in flight
-        roll_ddot = 0.0
-        pitch_ddot = 0.0
-        yaw_ddot = 0.0
-
-        return ca.vertcat(
-            x_dot, y_dot, z_dot, roll_dot, pitch_dot, yaw_dot,
-            x_f_dot, y_f_dot, z_f_dot, x_h_dot, y_h_dot, z_h_dot,
-            x_ddot, y_ddot, z_ddot, roll_ddot, pitch_ddot, yaw_ddot
-        )
-        
-    def land_dynamics(self, x_cartesian: ca.SX, u: ca.SX):
-        """
-        3D Land dynamics in Cartesian coordinates.
-
-        Args:
-            x_cartesian (ca.SX): Cartesian state
-            u           (ca.SX): Control input
-
-        Returns:
-            ca.SX: State derivative
-        """
-        x, y, z, roll, pitch, yaw, x_f, y_f, z_f, x_h, y_h, z_h, x_dot, y_dot, z_dot, roll_dot, pitch_dot, yaw_dot = ca.vertsplit(x_cartesian)
-        F_xf, F_yf, F_zf, F_xh, F_yh, F_zh, v_xf, v_yf, v_zf, v_xh, v_yh, v_zh = ca.vertsplit(u)
-
-        # Front foot fixed
-        x_f_dot = 0
-        y_f_dot = 0
-        z_f_dot = 0
-        
-        # Hind foot can move
-        R = self.rotation_matrix(roll, pitch, yaw)
-        omega = ca.vertcat(roll_dot, pitch_dot, yaw_dot)
-        r_h = ca.vertcat(x_h - x, y_h - y, z_h - z)
-        
-        foot_vel_h = ca.mtimes(R, ca.vertcat(v_xh, v_yh, v_zh))
-        
-        x_h_dot = x_dot + foot_vel_h[0] - ca.cross(omega, r_h)[0]
-        y_h_dot = y_dot + foot_vel_h[1] - ca.cross(omega, r_h)[1]
-        z_h_dot = z_dot + foot_vel_h[2] - ca.cross(omega, r_h)[2]
-        
-        # Linear accelerations
-        x_ddot = F_xf / self.m
-        y_ddot = F_yf / self.m
-        z_ddot = F_zf / self.m - self.g
-        
-        # Calculate moment arm and torque for front foot
-        r_f = ca.vertcat(x_f - x, y_f - y, z_f - z)
-        F_f = ca.vertcat(F_xf, F_yf, F_zf)
-        tau_f = ca.cross(r_f, F_f)
-        
-        # Angular accelerations
-        roll_ddot = tau_f[0] / self.I[0, 0]
-        pitch_ddot = tau_f[1] / self.I[1, 1]
-        yaw_ddot = tau_f[2] / self.I[2, 2]
-
-        return ca.vertcat(
-            x_dot, y_dot, z_dot, roll_dot, pitch_dot, yaw_dot,
-            x_f_dot, y_f_dot, z_f_dot, x_h_dot, y_h_dot, z_h_dot,
-            x_ddot, y_ddot, z_ddot, roll_ddot, pitch_ddot, yaw_ddot
+        self.dynamics = ca.Function(
+            'SRB',
+            [x_cartesian, u],
+            [dxdt],
+            ['x_cartesian', 'u'],
+            ['dxdt'],
         )
         
     def rotation_matrix(self, roll, pitch, yaw):
@@ -332,3 +284,79 @@ class SingleRigidBody3D:
         q = ca.Function('q', [base_pos, orientation, foot_pos], [q])
         
         return q
+    
+    def quat_to_rot_matrix(self, q):
+        """
+        Converts a quaternion [w, x, y, z] to a 3x3 rotation matrix R.
+        R transforms a vector from body frame to inertial frame.
+        
+        Args:
+            q (ca.SX): Quaternion vector [w, x, y, z]
+            
+        Returns:
+            ca.SX: 3x3 rotation matrix R
+        """
+        w, x, y, z = ca.vertsplit(q)
+        
+        R = ca.SX(3, 3)
+        
+        R[0, 0] = 1 - 2 * (y**2 + z**2)
+        R[0, 1] = 2 * (x * y - w * z)
+        R[0, 2] = 2 * (x * z + w * y)
+        R[1, 0] = 2 * (x * y + w * z)
+        R[1, 1] = 1 - 2 * (x**2 + z**2)
+        R[1, 2] = 2 * (y * z - w * x)
+        R[2, 0] = 2 * (x * z - w * y)
+        R[2, 1] = 2 * (y * z + w * x)
+        R[2, 2] = 1 - 2 * (x**2 + y**2)
+        return R
+    
+    def quat_multiply(self, q1, q2):
+        """
+        Multiplies two quaternions q1 and q2.
+        q1 * q2 = [w1*w2 - x1*x2 - y1*y2 - z1*z2, w1*x2 + x1*w2 + y1*z2 - z1*y2, w1*y2 - x1*z2 + y1*w2 + z1*x2, w1*z2 + x1*y2 - y1*x2 + z1*w2]
+        """
+        w1, x1, y1, z1 = ca.vertsplit(q1)
+        w2, x2, y2, z2 = ca.vertsplit(q2)
+        
+        w = w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2
+        x = w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2
+        y = w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2
+        z = w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2
+        
+        return ca.vertcat(w, x, y, z)
+    
+    def quat_dot(self, q, omega_body):
+        """
+        Calculates the quaternion derivative q_dot given quaternion q and
+        angular velocity omega in the body frame.
+        q_dot = 0.5 * q * [0, omega_x, omega_y, omega_z]
+        """
+        omega_quat = ca.vertcat(0, omega_body)  # Convert angular velocity to quaternion form
+        q_dot = 0.5 * self.quat_multiply(q, omega_quat)
+        return q_dot
+    
+    def sigmoid_function(self, gamma=1000, gamma_v=1000):
+        """
+        This method is used to define the sigmoid function.
+        
+        Args:
+            z: float
+                Input value.
+            gamma: float
+                Gain parameter.
+                
+        Returns:
+            Sigmoid: casadi.Function
+                Sigmoid function.
+            Sigmoid_V: casadi.Function
+                Sigmoid function for velocity.
+        """
+        # Contact activation function
+        z = ca.SX.sym('z')
+        sig = 1 / (1 + ca.exp(-gamma*z))
+        sig_v = 1 / (1 + ca.exp(-gamma_v*z))
+        Sigmoid = ca.Function('Sigmoid', [z], [sig])
+        Sigmoid_V = ca.Function('Sigmoid_V', [z], [sig_v])
+        
+        return Sigmoid, Sigmoid_V
