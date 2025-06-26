@@ -10,6 +10,10 @@ PLOT = True
 # Load system parameters from YAML file
 with open('config/params.yaml', 'r') as file:
     params = yaml.safe_load(file)
+    
+# Load the problem parameters
+with open('config/problem.yaml', 'r') as file:
+    problem_params = yaml.safe_load(file)
 
 # Define the initial state
 x0 = np.array([0.03, -0.0075, 0.0])
@@ -49,16 +53,10 @@ soft_contact_mpc.set_bounds_x(lb, ub)
 
 
 # Load the model
-soft_contact_mpc.load_model(params)
+soft_contact_mpc.load_model(params['model'])
 
-# Define the gains for the cost function
-gains = {
-    'k_force': 1e-4,
-    'k_vel': 0,
-    'k_pos': 1e4,
-}
 # Create the cost function
-soft_contact_mpc.cost_function(gains, xdes=xd)
+soft_contact_mpc.cost_function(params['cost'], xdes=xd)
 
 # # Add initial state constraints
 # soft_contact_mpc.add_constraint([soft_contact_mpc.state[0]], np.reshape(x0, (-1,1)), np.reshape(x0, (-1,1)))
@@ -75,13 +73,7 @@ for i in range(1, soft_contact_mpc.N+1):
     upper_bound = params['dmin'] + h_box
     soft_contact_mpc.add_constraint(bounding_box, lower_bound, upper_bound)
     
-# Set terminal cost
-terminal_gains = {
-    'alpha': 0,
-    'beta': 0.0,
-    'gamma': 0,
-}
-soft_contact_mpc.set_terminal_cost(xd, terminal_gains)
+soft_contact_mpc.set_terminal_cost(xd, params['cost'])
 
 # Set initial guess
 soft_contact_mpc.opt_var_0, z0_g, z0_p, Fz_p0, vz_p0, terrain = soft_contact_mpc.init_values(x0, u0)
@@ -116,7 +108,7 @@ if PLOT:
     # plt.show()
 
 # Create the optimization problem
-soft_contact_mpc.create_solver()
+soft_contact_mpc.create_solver(params['solver'])
 
 z_g_opt, z_p_opt, vz_g_opt, Fz_p_opt, vz_p_opt, Fz_p_opt_sig, vz_p_opt_sig = soft_contact_mpc.solve()
 

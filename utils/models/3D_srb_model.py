@@ -1,6 +1,7 @@
 import casadi as ca
-import numpy as np
+from math import sqrt
 import matplotlib.pyplot as plt
+import numpy as np
 import dill
 from numbers import Number
 
@@ -13,40 +14,29 @@ class SingleRigidBody3D:
     g = np.array([0, 0, 9.81])  # Gravity vector in 3D
     friction = 0.6
 
-    def __init__(self, 
-                mass:                           float,
-                inertia_tensor:                 np.ndarray,  # 3x3 inertia tensor
-                leg_length:                     float,
-                lower_leg_length:               float,
-                upper_leg_length:               float,
-                com_hip_distance:               float,
-                box_length:                     float,
-                box_width:                      float,
-                box_height:                     float,
-                minimum_distance_h:             float,
-                minimum_foot2hip_dist:          float,
-                gamma:                          float,
-                gamma_v:                        float,
-                ) -> None:
+    def __init__(self,
+                params:     dict, 
+        ) -> None:
 
-        self.m = mass
-        self.I = inertia_tensor  # 3x3 inertia tensor
-        self.leg_length = leg_length
-        self.l1 = lower_leg_length
-        self.l2 = upper_leg_length
-        self.l3 = com_hip_distance
-        self.l_box = box_length
-        self.w_box = box_width
-        self.h_box = box_height
-        self.dmin = minimum_distance_h
-        self.min_f2h_dist = minimum_foot2hip_dist
-        self.gamma = gamma
-        self.gamma_v = gamma_v
+        self.m = params['mass']
+        self.I = np.array(params['inertia_tensor']).reshape(3, 3)
+        self.leg_length = params['leg_length']
+        self.l1 = params['l1']
+        self.l2 = params['l2']
+        self.l3 = params['l3']
+        self.l_box = params['l_box']
+        self.w_box = params['w_box']
+        self.h_box = sqrt(self.leg_length**2 - self.l_box**2)  # [m]
+        self.dmin = params['dmin']
+        self.min_f2h_dist = params['dmin']  
+        self.gamma = params['gamma']
+        self.gamma_v = params['gamma_v']
         
         self.sigmoid, self.sigmoid_v = self.sigmoid_function(self.gamma, self.gamma_v)
+        
 
-        self.IK_front = self.inverse_kinematics(leg='F')
-        self.IK_hind = self.inverse_kinematics(leg='H')
+        # self.IK_front = self.inverse_kinematics(leg='F')
+        # self.IK_hind = self.inverse_kinematics(leg='H')
         
     def rigid_body_dynamics(self, h_terrain: ca.Function):
         """

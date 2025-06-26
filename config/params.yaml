@@ -24,7 +24,8 @@ cost:
 
 
 solver:
-  max_iter: 100,        # maximum iterations
-  tol: 1e-6,            # tolerance
-  acceptable_tol: 1e-4, # acceptable tolerance
-  print_level: 0,       # print level
+  ipopt:
+    max_iter: 100,        # maximum iterations
+    tol: 1e-6,            # tolerance
+    acceptable_tol: 1e-4, # acceptable tolerance
+    print_level: 0,       # print level

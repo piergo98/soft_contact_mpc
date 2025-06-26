@@ -9,35 +9,43 @@ class SoftContactMPC:
             self.lbg = lbg
             self.ubg = ubg
             self.name = name
-    def __init__(self, x0, u0, nx, nu, N, T, n_int=2):
-        # Number of states
-        self.nx = nx
-        # Number of control input
-        self.nu = nu
+    def __init__(self, model, x0, u0, nx, nu, N, T, n_int=2):
+        
+        # Load the model
+        self.model = model
+        
+    def set_up_problem(self, params):
+        """
+        This method is used to set up the optimization problem.
+        Args:
+            params: dict
+                Dictionary containing the parameters of the optimization problem.
+        """
         # Number of time steps
-        self.N = N
+        self.N = params['N']
         # Time horizon
-        self.T = T
+        self.T = params['horizon']
         # Discretization time step
-        self.DT = T / N
+        self.DT = self.T / self.N
         # Number of integrations between two steps
-        self.n_int = n_int
+        self.n_int = params['n_int']
         # Integration step
         self.h = self.DT / self.n_int
         # Number of optimization variables
-        self.n_opti = (self.nx + self.nu) * (self.N) + self.nx
+        
+        self.n_opti = (self.model.n_states + self.model.n_controls) * (self.N) + self.model.n_states
         
         # Define symbolic variables for the computations
-        self.x = ca.MX.sym('x', self.nx)
-        self.u = ca.MX.sym('u', self.nu)
+        self.x = ca.SX.sym('x', self.model.n_states)
+        self.u = ca.SX.sym('u', self.model.n_controls)
         
         # Define the symbolic variables used for the optimization
-        self.state = [ca.MX.sym("X_0", self.nx)]
+        self.state = [ca.SX.sym("X_0", self.model.n_states)]
         self.inputs = []
         self.opt_var = self.state.copy()
         for i in range(self.N):
-            self.inputs += [ca.MX.sym(f"U_{i}", self.nu)]
-            self.state += [ca.MX.sym(f"X_{i+1}", self.nx)]
+            self.inputs += [ca.SX.sym(f"U_{i}", self.model.n_controls)]
+            self.state += [ca.SX.sym(f"X_{i+1}", self.model.n_states)]
             self.opt_var += [self.inputs[i], self.state[i+1]]
                 
         # self.opt_var_0 = self.init_values(x0, u0)
@@ -47,31 +55,6 @@ class SoftContactMPC:
         
         self.cost = 0
         self.constraints = []
-        
-    def sigmoid_function(self, gamma=1000, gamma_v=1000):
-        """
-        This method is used to define the sigmoid function.
-        
-        Args:
-            z: float
-                Input value.
-            gamma: float
-                Gain parameter.
-                
-        Returns:
-            Sigmoid: casadi.Function
-                Sigmoid function.
-            Sigmoid_V: casadi.Function
-                Sigmoid function for velocity.
-        """
-        # Contact activation function
-        z = ca.SX.sym('z')
-        sig = 1 / (1 + ca.exp(-gamma*z))
-        sig_v = 1 / (1 + ca.exp(-gamma_v*z))
-        Sigmoid = ca.Function('Sigmoid', [z], [sig])
-        Sigmoid_V = ca.Function('Sigmoid_V', [z], [sig_v])
-        
-        return Sigmoid, Sigmoid_V
     
     def terrain(self, slope=0.0):
         """
@@ -85,56 +68,15 @@ class SoftContactMPC:
             float
                 Output value of the terrain profile.
         """
-        x_t = ca.MX.sym('x_t')
+        x_t = ca.SX.sym('x_t')
         # h_t = h_j * (1 / (1 + exp(-300*(x_t - x_j))))          # Step function bild like a sigmoid
         h_t = slope*x_t
         # h_t = 0.0*sin(1000*x_t)
         h_terrain = ca.Function('h_terrain', [x_t], [h_t])
         
+        # Build thhe rigid body dynamics function
+        self.model.rigid_body_dynamics(h_terrain)
         return h_terrain
-    
-    def load_model(self, parameters):
-        """
-        This method is used to load the model parameters and to build the model that
-        approximates a leg of the quadruped robot.
-        
-        Args:
-            parameters: dict
-                Dictionary containing the model parameters.
-        """
-        ## Model parameters
-        # Mass
-        m = parameters['m'] 
-        # Inertia
-        I = parameters['I']
-        # Quadruped dimensions
-        length = parameters['length']
-        width = parameters['width']  
-        heigth = parameters['height']  
-
-        # Leg length
-        leg_length = parameters['leg_length']
-        dmin = parameters['dmin']
-        l_box = parameters['l_box']
-        self.gamma = parameters['gamma']
-        self.gamma_v = parameters['gamma_v']
-        
-        h_box = (leg_length**2 - l_box**2)**(1/2) - dmin
-        # Gravity
-        g = 9.81
-        
-        # Extract the sigmoid functions
-        sig, sig_v = self.sigmoid_function(self.gamma, self.gamma_v)
-        
-        # Contact forces
-        Fz_P = sig(-self.x[1])*self.u[0]
-        
-        # Single rigid body single contact point 1D (jumping leg)
-        x_dot0 = self.x[2]
-        x_dot1 = sig_v(self.x[1])*(self.u[1] + self.x[2])  
-        x_dot2 = Fz_P/m - g
-
-        self.x_dot = ca.vertcat(x_dot0, x_dot1, x_dot2)
         
     def cost_function(self, gains, xdes=None):
         """
@@ -146,9 +88,7 @@ class SoftContactMPC:
         """
         # Check if the desired state is defined
         if xdes is None:
-            xdes = np.zeros(self.nx)
-        
-        x_dot = self.x_dot
+            xdes = np.zeros(self.model.n_states)
         
         k_force = gains['k_force']
         k_vel = gains['k_vel']
@@ -162,7 +102,12 @@ class SoftContactMPC:
         This method is used to define the ordinary differential equation of the optimization problem.
         """     
         
-        dynamics = ca.Function('dynamics', [self.x, self.u], [self.x_dot, self.L], ['x0', 'u0'], ['xf', 'qf'])
+        dynamics = ca.Function('dynamics', 
+                               [self.x, self.u], 
+                               [self.model.dynamics(self.x, self.u), self.L], 
+                               ['x0', 'u0'], 
+                               ['xf', 'qf']
+                            )
         
         return dynamics
     
@@ -172,8 +117,8 @@ class SoftContactMPC:
         """
         # Define the integrator
         ode = self.ode()
-        X0 = ca.MX.sym('X0', self.nx)
-        U = ca.MX.sym('U', self.nu)
+        X0 = ca.SX.sym('X0', self.model.n_states)
+        U = ca.SX.sym('U', self.model.n_controls)
         X = X0
         Q = 0
         for j in range(self.n_int):
@@ -185,8 +130,13 @@ class SoftContactMPC:
             # Q = Q + self.h/6*(k1_q + 2*k2_q + 2*k3_q + k4_q)
             X = X + self.h*k1
             Q = Q + self.h*k1_q
-        self.update_state = ca.Function('update_state', [X0, U], [X, Q], ['x0', 'u0'], ['xf', 'qf'])
-        
+        self.update_state = ca.Function('update_state', 
+                                        [X0, U], 
+                                        [X, Q], 
+                                        ['x0', 'u0'], 
+                                        ['xf', 'qf']
+                                    )
+                
     def init_values(self, x0, u0):
         """
         This method is used to define the initial values of the optimization variables.
@@ -203,8 +153,8 @@ class SoftContactMPC:
         vz_p0 = []
         
         # Set the initial state in the constraints of the optimization variables
-        self.lb_opt_var[:self.nx] = x0.tolist()
-        self.ub_opt_var[:self.nx] = x0.tolist()    
+        self.lb_opt_var[:self.model.n_states] = x0.tolist()
+        self.ub_opt_var[:self.model.n_states] = x0.tolist()    
         # Define the terrain profile
         h_terrain = self.terrain()
 
@@ -234,16 +184,16 @@ class SoftContactMPC:
         This method is used to set the bounds of the state variables.
         """
         for i in range(self.N):
-            self.lb_opt_var[i*(self.nx+self.nu):i*(self.nx+self.nu)+self.nx] = inputs_lb
-            self.ub_opt_var[i*(self.nx+self.nu):i*(self.nx+self.nu)+self.nx] = inputs_ub
+            self.lb_opt_var[i*(self.model.n_states+self.model.n_controls):i*(self.model.n_states+self.model.n_controls)+self.model.n_states] = inputs_lb
+            self.ub_opt_var[i*(self.model.n_states+self.model.n_controls):i*(self.model.n_states+self.model.n_controls)+self.model.n_states] = inputs_ub
         
     def set_bounds_u(self, inputs_lb, inputs_ub):
         """
         This method is used to set the bounds of the control input variables.
         """
         for i in range(self.N):
-            self.lb_opt_var[i*(self.nx+self.nu)+self.nx:i*(self.nx+self.nu)+self.nx+self.nu] = inputs_lb
-            self.ub_opt_var[i*(self.nx+self.nu)+self.nx:i*(self.nx+self.nu)+self.nx+self.nu] = inputs_ub
+            self.lb_opt_var[i*(self.model.n_states+self.model.n_controls)+self.model.n_states:i*(self.model.n_states+self.model.n_controls)+self.model.n_states+self.model.n_controls] = inputs_lb
+            self.ub_opt_var[i*(self.model.n_states+self.model.n_controls)+self.model.n_states:i*(self.model.n_states+self.model.n_controls)+self.model.n_states+self.model.n_controls] = inputs_ub
         
     def add_constraint(self, g, lbg, ubg, name=None):
         """
@@ -286,8 +236,8 @@ class SoftContactMPC:
             # Continuity constraint
             self.add_constraint(
                 g=[Xk_end - self.state[i+1]],
-                lbg=np.zeros(self.nx),
-                ubg=np.zeros(self.nx),
+                lbg=np.zeros(self.model.n_states),
+                ubg=np.zeros(self.model.n_states),
                 name=f"Multiple shooting {i}",
             )
     
@@ -303,7 +253,7 @@ class SoftContactMPC:
         """
         self.cost += gains['alpha']*(self.state[-1][0] - xdes[0])**2 + gains['beta']*(self.state[-1][1] - xdes[1])**2 + gains['gamma']*(self.state[-1][2] - xdes[2])**2    
     
-    def create_solver(self):
+    def create_solver(self, params):
         """
         This method is used to create the solver of the optimization problem.
         """
@@ -317,20 +267,20 @@ class SoftContactMPC:
             'g': ca.vertcat(*g)
         }
                 
-        opts = {
-            'ipopt.max_iter': 5e3,
-            # 'ipopt.gradient_approximation': 'finite-difference-values',
-            # 'ipopt.hessian_approximation': 'limited-memory', 
-            # 'ipopt.hsllib': "/usr/local/libhsl.so",
-            # 'ipopt.linear_solver': 'mumps',
-            # 'ipopt.mu_strategy': 'adaptive',
-            # 'ipopt.adaptive_mu_globalization': 'kkt-error',
-            'ipopt.tol': 1e-6,
-            'ipopt.acceptable_tol': 1e-4,
-            'ipopt.print_level': 3
-        }
+        # opts = {
+        #     'ipopt.max_iter': 5e3,
+        #     # 'ipopt.gradient_approximation': 'finite-difference-values',
+        #     # 'ipopt.hessian_approximation': 'limited-memory', 
+        #     # 'ipopt.hsllib': "/usr/local/libhsl.so",
+        #     # 'ipopt.linear_solver': 'mumps',
+        #     # 'ipopt.mu_strategy': 'adaptive',
+        #     # 'ipopt.adaptive_mu_globalization': 'kkt-error',
+        #     'ipopt.tol': 1e-6,
+        #     'ipopt.acceptable_tol': 1e-4,
+        #     'ipopt.print_level': 3
+        # }
                         
-        self.solver = ca.nlpsol('solver', 'ipopt', problem, opts)
+        self.solver = ca.nlpsol('solver', 'ipopt', problem, params['ipopt'])
         
     def solve(self):
         """
@@ -369,13 +319,13 @@ class SoftContactMPC:
         sig, sig_v = self.sigmoid_function(self.gamma, self.gamma_v)
         
         for i in range(self.N):
-            z_g_opt += [sol[i*(self.nx+self.nu)]]
-            z_p_opt += [sol[i*(self.nx+self.nu) + 1]]
-            vz_g_opt += [sol[i*(self.nx+self.nu) + 2]]
-            Fz_p_opt += [(sol[i*(self.nx+self.nu) + 3])]
-            vz_p_opt += [(sol[i*(self.nx+self.nu) + 4])]
-            Fz_p_opt_sig += [((sol[i*(self.nx+self.nu) + 3])*sig(-z_p_opt[i])).full().flatten()[0]]
-            vz_p_opt_sig += [((sol[i*(self.nx+self.nu) + 4])*sig_v(z_p_opt[i])).full().flatten()[0]]
+            z_g_opt += [sol[i*(self.model.n_states+self.model.n_controls)]]
+            z_p_opt += [sol[i*(self.model.n_states+self.model.n_controls) + 1]]
+            vz_g_opt += [sol[i*(self.model.n_states+self.model.n_controls) + 2]]
+            Fz_p_opt += [(sol[i*(self.model.n_states+self.model.n_controls) + 3])]
+            vz_p_opt += [(sol[i*(self.model.n_states+self.model.n_controls) + 4])]
+            Fz_p_opt_sig += [((sol[i*(self.model.n_states+self.model.n_controls) + 3])*sig(-z_p_opt[i])).full().flatten()[0]]
+            vz_p_opt_sig += [((sol[i*(self.model.n_states+self.model.n_controls) + 4])*sig_v(z_p_opt[i])).full().flatten()[0]]
             
 
         return z_g_opt, z_p_opt, vz_g_opt, Fz_p_opt, vz_p_opt, Fz_p_opt_sig, vz_p_opt_sig

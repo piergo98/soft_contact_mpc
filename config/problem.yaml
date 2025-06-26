@@ -3,4 +3,5 @@ optimization_problem:
   final_state: [0.0, 0.0, 0.0]
   horizon: 0.5
   N: 20
+  n_int: 4
   
