@@ -1,0 +1,6 @@
+optimization_problem:
+  initial_state: [0.03, -0.0075, 0.0]
+  final_state: [0.0, 0.0, 0.0]
+  horizon: 0.5
+  N: 20
+  
