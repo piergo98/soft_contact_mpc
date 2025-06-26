@@ -23,7 +23,10 @@ class SigleRigidBody2D:
                 box_length:                     float,
                 box_heigth:                     float,
                 minimum_distance_h:             float,
-                minimum_foot2hip_dist:           float) -> None:
+                minimum_foot2hip_dist:          float,
+                gamma:                          float,
+                gamma_v:                        float,
+                ) -> None:
 
         self.m  = mass
         self.I  = inertia
@@ -35,116 +38,76 @@ class SigleRigidBody2D:
         self.h_box = box_heigth
         self.dmin = minimum_distance_h
         self.min_f2h_dist = minimum_foot2hip_dist
+        
+        self.gamma = gamma
+        self.gamma_v = gamma_v
+        
+        self.sigmoid, self.sigmoid_v = self.sigmoid_function(self.gamma, self.gamma_v)
 
         self.IK_front = self.inverse_kinematics(leg='F')
         self.IK_hind = self.inverse_kinematics(leg='H')
-        # self.load_auto_gen_functions()
-
-
-    def stance_dynamics(self, x_cartesian: ca.SX, u: ca.SX):
-        """
-        Stance dynamics in Cartesian coordinates.
-
-        Args:
-            x_cartesian (list): Cartesian state.
-            u           (list): Control input.
-
-        Returns:
-            list: State derivative.
-        """
-        x, z, theta, x_f, z_f, x_h, z_h, x_dot, z_dot, theta_dot = ca.vertsplit(x_cartesian)
-        F_xf, F_zf, F_xh, F_zh, v_xf, v_zf, v_xh, v_zh = ca.vertsplit(u)
         
-        x_f_dot = 0
-        z_f_dot = 0
-        x_h_dot = 0
-        z_h_dot = 0
-        x_ddot = (F_xf + F_xh) /self.m
-        z_ddot = (F_zf + F_zh) /self.m - self.g
-        theta_ddot = (F_xf*(z_f-z) - F_zf*(x_f-x) - F_zh*(x_h-x) + F_xh*(z_h-z)) / self.I
+    def rigid_body_dynamics(self, h_terrain: ca.Function):
+        """
+        2D Rigid body dynamics in Cartesian coordinates.
 
+        Args:
+            h_terrain (ca.Function): Function to compute terrain height at x position.
 
-        return ca.vertcat(x_dot, z_dot, theta_dot,
-                x_f_dot, z_f_dot, x_h_dot, z_h_dot,
-                x_ddot, z_ddot, theta_ddot)
+        Returns:
+            ca.SX: State derivative.
+        """
+        # Define symbolic variables for state and control input
+        x_cartesian = ca.SX.sym('x_cartesian', self.n_states)  # State vector in Cartesian coordinates
+        u = ca.SX.sym('u', self.n_controls)  # Control input vector
         
-    def push_dynamics(self, x_cartesian: ca.SX, u: ca.SX):
-        """
-        Push dynamics in Cartesian coordinates.
+        # Extract states
+        x, z, theta, x_dot, z_dot, theta_dot, x_f, z_f, x_h, z_h = ca.vertsplit(x_cartesian)
 
-        Args:
-            x_cartesian (ca.SX): Cartesian state
-            u           (ca.SX): Control input
-
-        Returns:
-            ca.SX: State derivative
-        """
-        x, z, theta, x_f, z_f, x_h, z_h, x_dot, z_dot, theta_dot = ca.vertsplit(x_cartesian)
+        # Extract control inputs
         F_xf, F_zf, F_xh, F_zh, v_xf, v_zf, v_xh, v_zh = ca.vertsplit(u)
 
-        x_f_dot = v_xf + x_dot - theta_dot*(z_f - z)
-        z_f_dot = v_zf + z_dot + theta_dot*(x_f - x)
-        x_h_dot = 0
-        z_h_dot = 0
-        x_ddot = F_xh/self.m
-        z_ddot = F_zh/self.m - self.g
-        theta_ddot = (-F_zh*(x_h-x) + F_xh*(z_h-z)) / self.I
+        # Calculate terrain height at foot positions
+        h_f = h_terrain(x_f)
+        h_h = h_terrain(x_h)
 
-        return ca.vertcat(x_dot, z_dot, theta_dot,
-                x_f_dot, z_f_dot, x_h_dot, z_h_dot,
-                x_ddot, z_ddot, theta_ddot)
+        # Apply sigmoid functions to compute contact forces based on height difference
+        F_xf_applied = self.sigmoid(h_f - z_f) * F_xf
+        F_zf_applied = self.sigmoid(h_f - z_f) * F_zf
+        F_xh_applied = self.sigmoid(h_h - z_h) * F_xh
+        F_zh_applied = self.sigmoid(h_h - z_h) * F_zh
 
-    def flight_dynamics(self, x_cartesian: ca.SX, u: ca.SX):
-        """
-        Flight dynamics in Cartesian coordinates.
+        # Rigid body kinematics
+        x_dot_eq = x_dot
+        z_dot_eq = z_dot
+        theta_dot_eq = theta_dot
 
-        Args:
-            x_cartesian (ca.SX): Cartesian state
-            u           (ca.SX): Control input
+        # Foot kinematics
+        x_f_dot = (v_xf + x_dot - theta_dot * (z_f - z)) * self.sigmoid_v(-h_f + z_f)
+        z_f_dot = (v_zf + z_dot + theta_dot * (x_f - x)) * self.sigmoid_v(-h_f + z_f)
+        x_h_dot = (v_xh + x_dot - theta_dot * (z_h - z)) * self.sigmoid_v(-h_h + z_h)
+        z_h_dot = (v_zh + z_dot + theta_dot * (x_h - x)) * self.sigmoid_v(-h_h + z_h)
 
-        Returns:
-            ca.SX: State derivative
-        """
-        x, z, theta, x_f, z_f, x_h, z_h, x_dot, z_dot, theta_dot = ca.vertsplit(x_cartesian)
-        F_xf, F_zf, F_xh, F_zh, v_xf, v_zf, v_xh, v_zh = ca.vertsplit(u)
+        # Rigid body dynamics
+        x_ddot = (F_xf_applied + F_xh_applied) / self.m
+        z_ddot = (F_zf_applied + F_zh_applied) / self.m - self.g
+        theta_ddot = (F_xf_applied * (z_f - z) - F_zf_applied * (x_f - x) + 
+                      F_xh_applied * (z_h - z) - F_zh_applied * (x_h - x)) / self.I
 
-        x_f_dot = v_xf + x_dot - theta_dot*(z_f - z)
-        z_f_dot = v_zf + z_dot + theta_dot*(x_f - x)
-        x_h_dot = v_xh + x_dot - theta_dot*(z_h - z)
-        z_h_dot = v_zh + z_dot + theta_dot*(x_h - x)
-        x_ddot = 0.0
-        z_ddot = -self.g
-        theta_ddot = 0.0
-
-        return ca.vertcat(x_dot, z_dot, theta_dot,
-                x_f_dot, z_f_dot, x_h_dot, z_h_dot,
-                x_ddot, z_ddot, theta_ddot)
+        # Combine all state derivatives
+        dxdt = ca.vertcat(
+            x_dot_eq, z_dot_eq, theta_dot_eq,
+            x_ddot, z_ddot, theta_ddot,
+            x_f_dot, z_f_dot, x_h_dot, z_h_dot,
+        )
         
-    def land_dynamics(self, x_cartesian: ca.SX, u: ca.SX):
-        """
-        Land dynamics in Cartesian coordinates.
-
-        Args:
-            x_cartesian (ca.SX): Cartesian state
-            u           (ca.SX): Control input
-
-        Returns:
-            ca.SX: State derivative
-        """
-        x, z, theta, x_f, z_f, x_h, z_h, x_dot, z_dot, theta_dot = ca.vertsplit(x_cartesian)
-        F_xf, F_zf, F_xh, F_zh, v_xf, v_zf, v_xh, v_zh = ca.vertsplit(u)
-
-        x_f_dot = 0
-        z_f_dot = 0
-        x_h_dot = v_xh + x_dot - theta_dot*(z_h - z)
-        z_h_dot = v_zh + z_dot + theta_dot*(x_h - x)
-        x_ddot = F_xf / self.m 
-        z_ddot = F_zf / self.m - self.g
-        theta_ddot = (F_xf*(z_f-z) - F_zf*(x_f-x)) / self.I
-
-        return ca.vertcat(x_dot, z_dot, theta_dot,
-                x_f_dot, z_f_dot, x_h_dot, z_h_dot,
-                x_ddot, z_ddot, theta_ddot)
+        self.dynamics = ca.Function(
+            'SRB',
+            [x_cartesian, u],
+            [dxdt],
+            ['x_cartesian', 'u'],
+            ['dxdt'],
+        )
         
     def jacobian(self, q, leg):
         """Returns inversed transposed Jacobian.
@@ -231,5 +194,30 @@ class SigleRigidBody2D:
         q = ca.Function('q', [base_pos, pitch_com, foot_pos], [q])
         
         return q
+    
+    def sigmoid_function(self, gamma=1000, gamma_v=1000):
+        """
+        This method is used to define the sigmoid function.
+        
+        Args:
+            z: float
+                Input value.
+            gamma: float
+                Gain parameter.
+                
+        Returns:
+            Sigmoid: casadi.Function
+                Sigmoid function.
+            Sigmoid_V: casadi.Function
+                Sigmoid function for velocity.
+        """
+        # Contact activation function
+        z = ca.SX.sym('z')
+        sig = 1 / (1 + ca.exp(-gamma*z))
+        sig_v = 1 / (1 + ca.exp(-gamma_v*z))
+        Sigmoid = ca.Function('Sigmoid', [z], [sig])
+        Sigmoid_V = ca.Function('Sigmoid_V', [z], [sig_v])
+        
+        return Sigmoid, Sigmoid_V
             
     
