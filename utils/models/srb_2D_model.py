@@ -9,6 +9,13 @@ class SigleRigidBody2D:
     # Class for a 2D Single Rigid Body model with feet.
 
     n_states = 10
+    n_com = 2  # CoM position in 2D (x, z)
+    n_quat = 1 # Quaternion orientation in 2D (theta)
+    n_linear_vel = 2  # Linear velocity in 2D (v_x, v_z)
+    n_angular_vel = 1  # Angular velocity in 2D (omega)
+    n_foot_vars = 2  # Foot position in 2D (p_x, p_z)
+    n_forces = 2 # Force on each foot in 2D (F_x, F_z)
+    n_velocities = 2  # Velocity of each foot in 2D (v_x, v_z)
     n_controls = 8   
     g = 9.81
     friction = 0.6

@@ -9,7 +9,14 @@ from numbers import Number
 class SingleRigidBody3D:
     # Class for a 3D Single Rigid Body model with feet.
 
-    n_states = 25  # (r, q, v, omega, p1, p2, p3, p4)
+    n_states = 25   # (r, q, v, omega, p1, p2, p3, p4)
+    n_com = 3       # CoM position in 3D (x, y, z)
+    n_quat = 4      # Quaternion orientation in 3D (w, x, y, z)
+    n_linear_vel = 3  # Linear velocity in 3D (v_x, v_y, v_z)
+    n_angular_vel = 3  # Angular velocity in 3D (omega_x, omega_y, omega_z)
+    n_foot_vars = 3  # Foot position in 3D (p_x, p_y, p_z)
+    n_forces = 3  # Force on each foot in 3D (F_x, F_y, F_z)
+    n_velocities = 3  # Velocity of each foot in 3D (v
     n_controls = 24  # (F_1, F_2, F_3, F_4, v_1, v_2, v_3, v_4)
     n_feet = 4  # Number of feet
     g = np.array([0, 0, 9.81])  # Gravity vector in 3D
@@ -20,7 +27,16 @@ class SingleRigidBody3D:
         ) -> None:
 
         self.m = params['mass']
-        self.I = np.array(params['inertia_tensor']).reshape(3, 3)
+        # Convert the 3 elements list into a 3x3 inertia tensor matrix
+        # with the list elements on the diagonal
+        if isinstance(params['inertia_tensor'], list) and len(params['inertia_tensor']) == 3:
+            Ixx, Iyy, Izz = params['inertia_tensor']
+            self.I = np.diag([Ixx, Iyy, Izz])  # Create diagonal matrix
+        else:
+            self.I = params['inertia_tensor']  # Assume it's already a matrix
+        self.length = params['length']  # Length of the body in 3D
+        self.width = params['width']    # Width of the body in 3D
+        self.height = params['height']  # Height of the body in 3D
         self.leg_length = params['leg_length']
         self.l1 = params['l1']
         self.l2 = params['l2']
@@ -76,9 +92,9 @@ class SingleRigidBody3D:
         p4 = ca.vertcat(p4x, p4y, p4z)                                  # Foot 4 position vector (RH)
         
         # Normalize quaternion to prevent drift during integration (optional but good practice)
-        norm_q = ca.norm_2(q)
-        if norm_q > 0:
-            q = q / norm_q
+        # norm_q = ca.norm_2(q)
+        # if norm_q > 0:
+        #     q = q / norm_q
         
         # Extract contact forces from u
         F_x1, F_y1, F_z1 = ca.vertsplit(u[:3])                          # Force on foot 1 (LF) 
@@ -185,8 +201,6 @@ class SingleRigidBody3D:
             'SRB',
             [x_cartesian, u],
             [dxdt],
-            ['x_cartesian', 'u'],
-            ['dxdt'],
         )
         
     def rotation_matrix(self, roll, pitch, yaw):
@@ -351,3 +365,60 @@ class SingleRigidBody3D:
         Sigmoid_V = ca.Function('Sigmoid_V', [z], [sig_v])
         
         return Sigmoid, Sigmoid_V
+    
+    def quat_to_euler(self, q):
+        """
+        Converts a quaternion [w, x, y, z] to Euler angles (roll, pitch, yaw).
+        
+        Args:
+            q (ca.SX): Quaternion vector [w, x, y, z]
+            
+        Returns:
+            ca.SX: Euler angles [roll, pitch, yaw]
+        """
+        w, x, y, z = ca.vertsplit(q)
+        
+        roll = ca.atan2(2*(w*x + y*z), 1 - 2*(x**2 + y**2))
+        pitch = ca.asin(2*(w*y - z*x))
+        yaw = ca.atan2(2*(w*z + x*y), 1 - 2*(y**2 + z**2))
+        
+        return ca.vertcat(roll, pitch, yaw)
+    
+    def euler_to_quat(self, roll, pitch, yaw):
+        """
+        Converts Euler angles (roll, pitch, yaw) to a quaternion [w, x, y, z].
+        
+        Args:
+            roll (ca.SX): Roll angle
+            pitch (ca.SX): Pitch angle
+            yaw (ca.SX): Yaw angle
+            
+        Returns:
+            ca.SX: Quaternion vector [w, x, y, z]
+        """
+        cy = ca.cos(yaw * 0.5)
+        sy = ca.sin(yaw * 0.5)
+        cp = ca.cos(pitch * 0.5)
+        sp = ca.sin(pitch * 0.5)
+        cr = ca.cos(roll * 0.5)
+        sr = ca.sin(roll * 0.5)
+
+        w = cr * cp * cy + sr * sp * sy
+        x = sr * cp * cy - cr * sp * sy
+        y = cr * sp * cy + sr * cp * sy
+        z = cr * cp * sy - sr * sp * cy
+        
+        return ca.vertcat(w, x, y, z)
+    
+    def quat_conjugate(self, q):
+        """
+        Returns the conjugate of a quaternion [w, x, y, z].
+        
+        Args:
+            q (ca.SX): Quaternion vector [w, x, y, z]
+            
+        Returns:
+            ca.SX: Conjugate quaternion [w, -x, -y, -z]
+        """
+        w, x, y, z = ca.vertsplit(q)
+        return ca.vertcat(w, -x, -y, -z)
