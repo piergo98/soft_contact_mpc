@@ -1,15 +1,15 @@
 model:
-  m: 5.5,               # mass
-  I: 9.2413606e-03,     # moment of inertia
-  length: 0.235,        # length
-  width: 0.3,           # width
-  height: 0.38,         # height
-  leg_length: 0.38,     # leg length
-  l1: 0.19,             # upper leg length
-  l2: 0.19,             # lower leg length
-  l3: 0.235,            # com-hip distance
-  dmin: 0.20,           # minimum distance
-  l_box: 0.250,         # box length
-  w_box: 0.3,           # box width
-  gamma: 100.0,         # penalty on the distance
-  gamma_v: 100.0,       # penalty on the velocity
+  mass: 5.5                                                           # mass
+  inertia_tensor: [4.0762590e-03, 9.2413606e-03, 1.2268730e-02]       # moment of inertia
+  length: 0.235                                                       # length
+  width: 0.17                                                          # width
+  height: 0.38                                                        # height
+  leg_length: 0.38                                                    # leg length
+  l1: 0.19                                                            # upper leg length
+  l2: 0.19                                                            # lower leg length
+  l3: 0.235                                                           # com-hip distance
+  dmin: 0.20                                                          # minimum distance
+  l_box: 0.250                                                        # box length
+  w_box: 0.250                                                          # box width
+  gamma: 100.0                                                        # penalty on the distance
+  gamma_v: 100.0                                                      # penalty on the velocity

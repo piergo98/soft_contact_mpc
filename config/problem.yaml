@@ -1,29 +1,38 @@
 optimization_problem:
-  initial_state: '[0.03, -0.0075, 0.0]'
-  initial_control: '[0.0, 0.0, 0.0]'
-  final_state: '[0.0, 0.0, 0.0]'
-  horizon: 0.5,
-  N: 20,
-  n_int: 4,
-  input_lower_bound: '[-0.5, -0.5, -0.5]'
-  input_upper_bound: '[0.5, 0.5, 0.5]'
-  state_lower_bound: '[-0.1, -0.1, -0.1]'
-  state_upper_bound: '[0.1, 0.1, 0.1]'
-  slope: 0.0,
+  initial_state: [0.0, 0.0, 0.28, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.235, 0.17, 0.0, 0.235, -0.17, 0.0, -0.235, 0.17, 0.0, -0.235, -0.17, 0.0]
+  final_state: [0.0, 0.0, 0.0]
+  horizon: 1.0  # [s]
+  N: 50
+  n_int: 4
+  input_lower_bound: [-100.0, -100.0, 0.0, -100.0, -100.0, 0.0, -100.0, -100.0, 0.0, -100.0, -100.0, 0.0, 0.0, 0.0, -3.0, 0.0, 0.0, -3.0, 0.0, 0.0, -3.0, 0.0, 0.0, -3.0]
+  input_upper_bound: [100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0]
+  state_lower_bound: [-100.0, -100.0, 0.0, 0.030, 0.171, 0.171, -0.970, -1.0, -1.0, -1.0, -2.0, -2.0, -2.0, -100.0, -100.0, 0.0, -100.0, -100.0, 0.0, -100.0, -100.0, 0.0, -100.0, -100.0, 0.0]
+  state_upper_bound: [100.0, 100.0, 2.0, 0.030, -0.171, 0.171, 0.970, 1.0, 1.0, 1.0, 2.0, 2.0, 2.0, 100.0, 100.0, 2.0, 100.0, 100.0, 2.0, 100.0, 100.0, 2.0, 100.0, 100.0, 2.0]
+  slope: 0.0
+  x_step: 0.5           # x step
+  y_step: 0.0           # y step
+  z_step: 0.0           # z step
+
 
 cost:
-  k_force: 0.1,         # force cost
-  k_vel: 0.1,           # vel cost
-  k_pos: 0.1,           # pos cost
-  alpha: 0.0,           # x terminal cost
-  beta: 0.0,            # z terminal cost
-  gamma: 0.0,           # theta terminal cost
-
+  k_pos: 0.1           # pos cost
+  k_orientation: 0.0   # orientation cost
+  k_vel: 0.1           # vel cost
+  k_omega: 0.1         # omega cost
+  k_foot: 0.1          # foot cost
+  k_force: 0.1         # force cost
+  k_foot_vel: 0.1      # foot vel cost
+  terminal:
+    alpha: 0.0           # x terminal cost
+    beta: 0.0            # z terminal cost
+    gamma: 0.0           # theta terminal cost
 
 solver:
   ipopt:
-    max_iter: 100,        # maximum iterations
-    tol: 1e-6,            # tolerance
-    acceptable_tol: 1e-4, # acceptable tolerance
-    print_level: 0,       # print level
+    max_iter: 100        # maximum iterations
+    tol: 1.0e-06            # tolerance
+    acceptable_tol: 1.0e-04 # acceptable tolerance
+    print_level: 5       # print level
+    # verbose: false         # verbose
+    # print_time: true     # print time
   
