@@ -248,13 +248,13 @@ class SoftContactMPC:
         Q = 0
         for j in range(self.n_int):
             k1, k1_q = ode(X, U)
-            # k2, k2_q = ode(X + self.h/2 * k1, U)
-            # k3, k3_q = ode(X + self.h/2 * k2, U)
-            # k4, k4_q = ode(X + self.h * k3, U)
-            # X = X+self.h/6*(k1 + 2*k2 + 2*k3 + k4)
-            # Q = Q + self.h/6*(k1_q + 2*k2_q + 2*k3_q + k4_q)
-            X = X + self.h*k1
-            Q = Q + self.h*k1_q
+            k2, k2_q = ode(X + self.h/2 * k1, U)
+            k3, k3_q = ode(X + self.h/2 * k2, U)
+            k4, k4_q = ode(X + self.h * k3, U)
+            X = X+self.h/6*(k1 + 2*k2 + 2*k3 + k4)
+            Q = Q + self.h/6*(k1_q + 2*k2_q + 2*k3_q + k4_q)
+            # X = X + self.h*k1
+            # Q = Q + self.h*k1_q
         self.update_state = ca.Function('update_state', 
                                         [X0, U], 
                                         [X, Q],
@@ -264,25 +264,48 @@ class SoftContactMPC:
         """
         This method is used to define the initial values of the optimization variables.
         """    
-        step_height = 0.2
+        step_height = 0.05
         frequency = 4
         t = np.linspace(0, self.T, self.N+1)
         print('Setting initial guess...', end=' ')
         
-        x         = np.linspace(x0[0], self.x_des[0], self.N+1)
-        z         = np.linspace(x0[1], self.x_des[1], self.N+1)
-        theta     = x0[2] * np.ones(self.N+1)
-        x_f       = np.linspace(x0[3], self.x_des[3], self.N+1)
-        z_f       = np.maximum(step_height*np.sin(2*np.pi*frequency*t), 0), 
-        x_h       = np.linspace(x0[5], self.x_des[5], self.N+1)
-        z_h       = np.maximum(step_height*np.sin(2*np.pi*frequency*t - np.pi/4), 0),
-        # x_dot     = (self.x_des[0] - x0[0]) / self.T * np.ones(self.N+1)
-        x_dot     = x0[7] * np.ones(self.N+1)
-        z_dot     = (self.x_des[1] - x0[1]) / self.T * np.ones(self.N+1)
-        theta_dot = x0[9] * np.ones(self.N+1)
+        x       = np.linspace(x0[0], self.x_des[0], self.N+1)
+        y       = np.linspace(x0[1], self.x_des[1], self.N+1)
+        z       = np.linspace(x0[2], self.x_des[2], self.N+1)
+        qw      = np.linspace(x0[3], self.x_des[3], self.N+1)
+        qx      = np.linspace(x0[4], self.x_des[4], self.N+1)
+        qy      = np.linspace(x0[5], self.x_des[5], self.N+1)
+        qz      = np.linspace(x0[6], self.x_des[6], self.N+1)
+        
+        vx      = np.linspace(x0[7], self.x_des[7], self.N+1)
+        vy      = np.linspace(x0[8], self.x_des[8], self.N+1)
+        vz      = np.linspace(x0[9], self.x_des[9], self.N+1)
+        wx      = np.linspace(x0[10], self.x_des[10], self.N+1)
+        wy      = np.linspace(x0[11], self.x_des[11], self.N+1)
+        wz      = np.linspace(x0[12], self.x_des[12], self.N+1)
+        
+        # Contact points
+        p1_x    = np.linspace(x0[13], self.x_des[13], self.N+1)
+        p1_y    = np.linspace(x0[14], self.x_des[14], self.N+1)
+        p1_z    = np.maximum(step_height*np.sin(2*np.pi*frequency*t), 0)
+        p2_x    = np.linspace(x0[15], self.x_des[15], self.N+1)
+        p2_y    = np.linspace(x0[16], self.x_des[16], self.N+1)
+        p2_z    = np.maximum(step_height*np.sin(2*np.pi*frequency*t - np.pi/4), 0)
+        p3_x    = np.linspace(x0[17], self.x_des[17], self.N+1)
+        p3_y    = np.linspace(x0[18], self.x_des[18], self.N+1)
+        p3_z    = np.maximum(step_height*np.sin(2*np.pi*frequency*t + np.pi/4), 0)
+        p4_x    = np.linspace(x0[19], self.x_des[19], self.N+1)
+        p4_y    = np.linspace(x0[20], self.x_des[20], self.N+1)
+        p4_z    = np.maximum(step_height*np.sin(2*np.pi*frequency*t - np.pi/2), 0)
+        
 
         for k in range(self.N):
-            self.w0 += [x[k], z[k], theta[k], x_f[k], z_f[0][k], x_h[k], z_h[0][k], x_dot[k], z_dot[k], theta_dot[k]]
+            self.w0 += [x[k], y[k], z[k], qw[k], qx[k], qy[k], qz[k],
+                        vx[k], vy[k], vz[k], wx[k], wy[k], wz[k],
+                        p1_x[k], p1_y[k], p1_z[k],
+                        p2_x[k], p2_y[k], p2_z[k],
+                        p3_x[k], p3_y[k], p3_z[k],
+                        p4_x[k], p4_y[k], p4_z[k],]
             if k != self.N-1:
                 self.w0 += u0
             
@@ -377,12 +400,12 @@ class SoftContactMPC:
 
             # Friction cone constraint: sqrt(fx^2 + fy^2) <= mu * fz
             # This ensures the tangential forces don't exceed friction limit
-            tangential_force = ca.sqrt(fx**2 + fy**2)
+            tangential_force = fx**2 + fy**2
             normal_force = fz
             
             # Add friction cone constraint
             self.add_constraint(
-                g=[tangential_force - self.model.friction * normal_force],
+                g=[tangential_force - (self.model.friction * normal_force)**2],
                 lbg=[-ca.inf],
                 ubg=[0],
                 name=f"Friction cone {i}_{k+1}"
@@ -441,6 +464,14 @@ class SoftContactMPC:
             ubg=[0],
             name=f"Quaternion normalization {i}"
         )
+        
+        # Set a non-negative real part of the quaternion to avoid ambiguity
+        # self.add_constraint(
+        #     g = [q[0]],  # Ensure the real part (q0) is non-negative
+        #     lbg=[0],
+        #     ubg=[ca.inf],
+        #     name=f"Quaternion non-negative real part {i}"
+        # )
             
     def set_obstacle_avoidance(self, i, params):
         """
@@ -519,7 +550,10 @@ class SoftContactMPC:
         for constraint in self.constraints:
             lbg = np.concatenate((lbg, constraint.lbg))
             ubg = np.concatenate((ubg, constraint.ubg))
-    
+        #     print(f"Constraint {constraint.name}")
+            
+        # input()
+        
         print('Solving optimization problem...')
         r = self.solver(
             x0=self.w0,
@@ -629,38 +663,39 @@ class SoftContactMPC:
         p4_opt = np.array(self.p4_opt)
         
         # Plot 3D CoM trajectory
-        plt.figure(figsize=(10, 6))
         # Create a 3D plot
         fig = plt.figure(figsize=(12, 8))
         ax = fig.add_subplot(111, projection='3d')
         
         # Plot 3D CoM trajectory
         ax.plot(r_opt[:, 0], r_opt[:, 1], r_opt[:, 2], label='CoM Trajectory', color='blue')
+        # Add initial and final points
+        ax.scatter(r_opt[0, 0], r_opt[0, 1], r_opt[0, 2], color='blue', s=100, label='Initial CoM Position')
+        ax.scatter(r_opt[-1, 0], r_opt[-1, 1], r_opt[-1, 2], color='blue', s=100, label='Final CoM Position')
         
         # Plot 3D foot trajectories
         ax.plot(p1_opt[:, 0], p1_opt[:, 1], p1_opt[:, 2], label='LF Foot Trajectory', color='red')
         ax.plot(p2_opt[:, 0], p2_opt[:, 1], p2_opt[:, 2], label='RF Foot Trajectory', color='green')
         ax.plot(p3_opt[:, 0], p3_opt[:, 1], p3_opt[:, 2], label='LH Foot Trajectory', color='orange')
         ax.plot(p4_opt[:, 0], p4_opt[:, 1], p4_opt[:, 2], label='RH Foot Trajectory', color='purple')
+        # Add initial and final foot positions
+        ax.scatter(p1_opt[0, 0], p1_opt[0, 1], p1_opt[0, 2], color='red', s=100, label='Initial LF Foot Position')
+        ax.scatter(p1_opt[-1, 0], p1_opt[-1, 1], p1_opt[-1, 2], color='red', s=100, label='Final LF Foot Position')
+        ax.scatter(p2_opt[0, 0], p2_opt[0, 1], p2_opt[0, 2], color='green', s=100, label='Initial RF Foot Position')
+        ax.scatter(p2_opt[-1, 0], p2_opt[-1, 1], p2_opt[-1, 2], color='green', s=100, label='Final RF Foot Position')
+        ax.scatter(p3_opt[0, 0], p3_opt[0, 1], p3_opt[0, 2], color='orange', s=100, label='Initial LH Foot Position')
+        ax.scatter(p3_opt[-1, 0], p3_opt[-1, 1], p3_opt[-1, 2], color='orange', s=100, label='Final LH Foot Position')
+        ax.scatter(p4_opt[0, 0], p4_opt[0, 1], p4_opt[0, 2], color='purple', s=100, label='Initial RH Foot Position')
+        ax.scatter(p4_opt[-1, 0], p4_opt[-1, 1], p4_opt[-1, 2], color='purple', s=100, label='Final RH Foot Position')
         
         ax.set_xlabel('X Position (m)')
         ax.set_ylabel('Y Position (m)')
         ax.set_zlabel('Z Position (m)')
         ax.set_title('3D CoM and Foot Trajectories')
         ax.legend()
+        ax.grid(True)
+        # ax.axis.set_box_aspect([1,1,1])  # Equal aspect ratio
         
-        # # Plot foot trajectories
-        # plt.plot(p1_opt[:, 0], p1_opt[:, 1], label='LF Foot Trajectory', color='red')
-        # plt.plot(p2_opt[:, 0], p2_opt[:, 1], label='RF Foot Trajectory', color='green')
-        # plt.plot(p3_opt[:, 0], p3_opt[:, 1], label='LH Foot Trajectory', color='orange')
-        # plt.plot(p4_opt[:, 0], p4_opt[:, 1], label='RH Foot Trajectory', color='purple')
-        
-        # plt.xlabel('X Position (m)')
-        # plt.ylabel('Y Position (m)')
-        # plt.title('CoM and Foot Trajectories')
-        # plt.legend()
-        plt.grid()
-        plt.axis('equal')
         plt.show()
 
     def write_to_csv(self, csv_name, q2_traj, q3_traj, torque2_traj, torque3_traj):
