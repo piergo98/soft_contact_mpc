@@ -9,9 +9,9 @@ from numbers import Number
 class SingleRigidBody3D:
     # Class for a 3D Single Rigid Body model with feet.
 
-    n_states = 25   # (r, q, v, omega, p1, p2, p3, p4)
+    n_states = 24   # (r, eul, v, omega, p1, p2, p3, p4)
     n_com = 3       # CoM position in 3D (x, y, z)
-    n_quat = 4      # Quaternion orientation in 3D (w, x, y, z)
+    n_eul = 3      # Euler angles orientation in 3D (roll, pitch, yaw)
     n_linear_vel = 3  # Linear velocity in 3D (v_x, v_y, v_z)
     n_angular_vel = 3  # Angular velocity in 3D (omega_x, omega_y, omega_z)
     n_foot_vars = 3  # Foot position in 3D (p_x, p_y, p_z)
@@ -43,7 +43,8 @@ class SingleRigidBody3D:
         self.l3 = params['l3']
         self.l_box = params['l_box']
         self.w_box = params['w_box']
-        self.h_box = sqrt(self.leg_length**2 - self.l_box**2)  # [m]
+        self.h_box = params['h_box']  # [m]
+        # self.h_box = sqrt(self.leg_length**2 - self.l_box**2)  # [m]
         self.dmin = params['dmin']
         self.min_f2h_dist = params['dmin']  
         self.gamma = params['gamma']
@@ -72,29 +73,24 @@ class SingleRigidBody3D:
         # Position and orientation
         x, y, z = ca.vertsplit(x_cartesian[:3])                         # Position of CoM in inertial frame
         r = ca.vertcat(x, y, z)                                         # Position vector
-        qw, qx, qy, qz = ca.vertsplit(x_cartesian[3:7])                 # Quaternion orientation [w, x, y, z]
-        q = ca.vertcat(qw, qx, qy, qz)                                  # Quaternion vector
+        roll, pitch, yaw = ca.vertsplit(x_cartesian[3:6])               # Euler angles orientation [roll, pitch, yaw]
+        theta = ca.vertcat(roll, pitch, yaw)                            # Euler angles vector
         
         # Linear and angular velocities
-        v_x, v_y, v_z = ca.vertsplit(x_cartesian[7:10])                 # Linear velocity
+        v_x, v_y, v_z = ca.vertsplit(x_cartesian[6:9])                  # Linear velocity
         v = ca.vertcat(v_x, v_y, v_z)                                   # Linear velocity vector
-        omega_x, omega_y, omega_z = ca.vertsplit(x_cartesian[10:13])    # Angular velocity
+        omega_x, omega_y, omega_z = ca.vertsplit(x_cartesian[9:12])     # Angular velocity
         omega = ca.vertcat(omega_x, omega_y, omega_z)                   # Angular velocity vector
         
         # Foot positions (assuming 4 feet in 3D model)
-        p1x, p1y, p1z = ca.vertsplit(x_cartesian[13:16])                # Foot 1 (LF)
+        p1x, p1y, p1z = ca.vertsplit(x_cartesian[12:15])                # Foot 1 (LF)
         p1 = ca.vertcat(p1x, p1y, p1z)                                  # Foot 1 position vector (LF)
-        p2x, p2y, p2z = ca.vertsplit(x_cartesian[16:19])                # Foot 2 (RF)
+        p2x, p2y, p2z = ca.vertsplit(x_cartesian[15:18])                # Foot 2 (RF)
         p2 = ca.vertcat(p2x, p2y, p2z)                                  # Foot 2 position vector (RF)
-        p3x, p3y, p3z = ca.vertsplit(x_cartesian[19:22])                # Foot 3 (LH) 
+        p3x, p3y, p3z = ca.vertsplit(x_cartesian[18:21])                # Foot 3 (LH) 
         p3 = ca.vertcat(p3x, p3y, p3z)                                  # Foot 3 position vector (LH)
-        p4x, p4y, p4z = ca.vertsplit(x_cartesian[22:25])                # Foot 4 (RH)
+        p4x, p4y, p4z = ca.vertsplit(x_cartesian[21:24])                # Foot 4 (RH)
         p4 = ca.vertcat(p4x, p4y, p4z)                                  # Foot 4 position vector (RH)
-        
-        # Normalize quaternion to prevent drift during integration (optional but good practice)
-        # norm_q = ca.norm_2(q)
-        # if norm_q > 0:
-        #     q = q / norm_q
         
         # Extract contact forces from u
         F_x1, F_y1, F_z1 = ca.vertsplit(u[:3])                          # Force on foot 1 (LF) 
@@ -123,36 +119,30 @@ class SingleRigidBody3D:
         )                                                               # Force vector for foot 4 (RH)
         
         # Extract foot velocities from u
-        v_x1, v_y1, v_z1 = ca.vertsplit(u[12:15])                       # Velocity of foot 1 (LF)
-        v_1 = ca.vertcat(
-            self.sigmoid_v(-h_terrain(p1x) + p1z)*v_x1, 
-            self.sigmoid_v(-h_terrain(p1x) + p1z)*v_y1, 
-            self.sigmoid_v(-h_terrain(p1x) + p1z)*v_z1
-        )                                                               # Velocity vector for foot 1 (LF)
-        v_x2, v_y2, v_z2 = ca.vertsplit(u[15:18])                       # Velocity of foot 2 (RF)
-        v_2 = ca.vertcat(
-            self.sigmoid_v(-h_terrain(p2x) + p2z)*v_x2, 
-            self.sigmoid_v(-h_terrain(p2x) + p2z)*v_y2, 
-            self.sigmoid_v(-h_terrain(p2x) + p2z)*v_z2
-        )                                                               # Velocity vector for foot 2 (RF)
-        v_x3, v_y3, v_z3 = ca.vertsplit(u[18:21])                       # Velocity of foot 3 (LH)
-        v_3 = ca.vertcat(
-            self.sigmoid_v(-h_terrain(p3x) + p3z)*v_x3, 
-            self.sigmoid_v(-h_terrain(p3x) + p3z)*v_y3, 
-            self.sigmoid_v(-h_terrain(p3x) + p3z)*v_z3
-        )                                                               # Velocity vector for foot 3 (LH)
-        v_x4, v_y4, v_z4 = ca.vertsplit(u[21:24])                       # Velocity of foot 4 (RH)
-        v_4 = ca.vertcat(
-            self.sigmoid_v(-h_terrain(p4x) + p4z)*v_x4, 
-            self.sigmoid_v(-h_terrain(p4x) + p4z)*v_y4, 
-            self.sigmoid_v(-h_terrain(p4x) + p4z)*v_z4
-        )                                                               # Velocity vector for foot 4 (RH)
+        # Convert orientation quaternion to rotation matrix (body to inertial)
+        R_wb = self.rotation_matrix(theta)
         
+        v_x1, v_y1, v_z1 = ca.vertsplit(u[12:15])                       # Velocity of foot 1 (LF)
+        v_1_base = ca.vertcat(v_x1, v_y1, v_z1)                                 
+        v_1 = self.sigmoid_v(-h_terrain(p1x) + p1z)  * (v + R_wb @ (ca.cross(omega, (p1 - r)) + v_1_base))  
+                                                                        # Velocity vector for foot 1 (LF)
+        v_x2, v_y2, v_z2 = ca.vertsplit(u[15:18])                       # Velocity of foot 2 (RF)
+        v_2_base = ca.vertcat(v_x2, v_y2, v_z2)
+        v_2 = self.sigmoid_v(-h_terrain(p2x) + p2z) * (v + R_wb @ (ca.cross(omega, (p2 - r)) + v_2_base))                                            
+                                                                        # Velocity vector for foot 2 (RF)
+        v_x3, v_y3, v_z3 = ca.vertsplit(u[18:21])                       # Velocity of foot 3 (LH)
+        v_3_base = ca.vertcat(v_x3, v_y3, v_z3)
+        v_3 = self.sigmoid_v(-h_terrain(p3x) + p3z) * (v + R_wb @ (ca.cross(omega, (p3 - r)) + v_3_base))                                                            
+                                                                        # Velocity vector for foot 3 (LH)
+        v_x4, v_y4, v_z4 = ca.vertsplit(u[21:24])                       # Velocity of foot 4 (RH)
+        v_4_base = ca.vertcat(v_x4, v_y4, v_z4)
+        v_4 = self.sigmoid_v(-h_terrain(p4x) + p4z) * (v + R_wb @ (ca.cross(omega, (p4 - r)) + v_4_base))                
+                                                                        # Velocity vector for foot 4 (RH)
         
         # --- Kinematics ---
         dp = v  # Rate of change of position is linear velocity
         
-        dq = self.quat_dot(q, omega)  # Quaternion derivative
+        dq = self.body_angular2euler_rates(theta) @ omega  # Euler angles derivative
         
         # --- Dynamics ---
         # Linear Dynamics: Newton's Second Law
@@ -160,8 +150,6 @@ class SingleRigidBody3D:
         dv = (F_tot / self.m) - self.g  # Linear acceleration (gravity included)
         
         # Angular Dynamics: Euler's Equations
-        # Convert orientation quaternion to rotation matrix (body to inertial)
-        R_wb = self.quat_to_rot_matrix(q)
         
         # Add torques from each foot
         F = [F_1, F_2, F_3, F_4]
@@ -203,18 +191,18 @@ class SingleRigidBody3D:
             [dxdt],
         )
         
-    def rotation_matrix(self, roll, pitch, yaw):
+    def rotation_matrix(self, theta):
         """
         Returns 3D rotation matrix from roll, pitch, yaw Euler angles.
         
         Args:
-            roll (ca.SX): Roll angle
-            pitch (ca.SX): Pitch angle
-            yaw (ca.SX): Yaw angle
+            theta (ca.SX): Euler angles vector [roll, pitch, yaw]
             
         Returns:
             ca.SX: 3x3 rotation matrix
         """
+        roll, pitch, yaw = ca.vertsplit(theta)
+        
         # Roll rotation
         R_roll = ca.vertcat(
             ca.horzcat(1, 0, 0),
@@ -237,7 +225,7 @@ class SingleRigidBody3D:
         )
         
         # Combined rotation matrix
-        return ca.mtimes(R_yaw, ca.mtimes(R_pitch, R_roll))
+        return R_yaw @ R_pitch @ R_roll  # Note the order of multiplication is important
         
     def jacobian(self, q, leg):
         """Returns inversed transposed Jacobian for 3D kinematics.
@@ -289,47 +277,6 @@ class SingleRigidBody3D:
         q = ca.Function('q', [base_pos, orientation, foot_pos], [q])
         
         return q
-    
-    def quat_to_rot_matrix(self, q):
-        """
-        Converts a quaternion [w, x, y, z] to a 3x3 rotation matrix R.
-        R transforms a vector from body frame to inertial frame.
-        
-        Args:
-            q (ca.SX): Quaternion vector [w, x, y, z]
-            
-        Returns:
-            ca.SX: 3x3 rotation matrix R
-        """
-        w, x, y, z = ca.vertsplit(q)
-        
-        R = ca.SX(3, 3)
-        
-        R[0, 0] = 1 - 2 * (y**2 + z**2)
-        R[0, 1] = 2 * (x * y - w * z)
-        R[0, 2] = 2 * (x * z + w * y)
-        R[1, 0] = 2 * (x * y + w * z)
-        R[1, 1] = 1 - 2 * (x**2 + z**2)
-        R[1, 2] = 2 * (y * z - w * x)
-        R[2, 0] = 2 * (x * z - w * y)
-        R[2, 1] = 2 * (y * z + w * x)
-        R[2, 2] = 1 - 2 * (x**2 + y**2)
-        return R
-    
-    def quat_multiply(self, q1, q2):
-        """
-        Multiplies two quaternions q1 and q2.
-        q1 * q2 = [w1*w2 - x1*x2 - y1*y2 - z1*z2, w1*x2 + x1*w2 + y1*z2 - z1*y2, w1*y2 - x1*z2 + y1*w2 + z1*x2, w1*z2 + x1*y2 - y1*x2 + z1*w2]
-        """
-        w1, x1, y1, z1 = ca.vertsplit(q1)
-        w2, x2, y2, z2 = ca.vertsplit(q2)
-        
-        w = w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2
-        x = w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2
-        y = w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2
-        z = w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2
-        
-        return ca.vertcat(w, x, y, z)
     
     def quat_dot(self, q, omega_body):
         """
@@ -410,15 +357,26 @@ class SingleRigidBody3D:
         
         return ca.vertcat(w, x, y, z)
     
-    def quat_conjugate(self, q):
+    def body_angular2euler_rates(self, theta):
         """
-        Returns the conjugate of a quaternion [w, x, y, z].
-        
+        Converts body angular rates to Euler angle rates.
         Args:
-            q (ca.SX): Quaternion vector [w, x, y, z]
-            
+            theta (ca.SX): Euler angles [roll, pitch, yaw]
         Returns:
-            ca.SX: Conjugate quaternion [w, -x, -y, -z]
+            ca.SX: Euler angle rates [roll_rate, pitch_rate, yaw_rate]
         """
-        w, x, y, z = ca.vertsplit(q)
-        return ca.vertcat(w, -x, -y, -z)
+        roll, pitch, yaw = ca.vertsplit(theta)
+        
+        # Calculate the Jacobian of the transformation
+        J = ca.SX.zeros(3, 3)
+        J[0, 0] = 1
+        J[0, 1] = ca.sin(roll) * ca.tan(pitch)
+        J[0, 2] = ca.cos(roll) * ca.tan(pitch)
+        J[1, 0] = 0
+        J[1, 1] = ca.cos(roll)
+        J[1, 2] = -ca.sin(roll)
+        J[2, 0] = 0
+        J[2, 1] = ca.sin(roll) / ca.cos(pitch)
+        J[2, 2] = ca.cos(roll) / ca.cos(pitch)
+        
+        return J

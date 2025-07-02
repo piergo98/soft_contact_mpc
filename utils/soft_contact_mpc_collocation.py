@@ -51,7 +51,8 @@ class SoftContactMPC:
         self.y_step = params['y_step']
         self.z_step = params['z_step'] 
         
-        epsilon = 0
+        #  Set up collocation method
+        self._set_collocation()
         
         # Desired final state
         x_fin = self.x0[0] + self.x_step
@@ -113,17 +114,59 @@ class SoftContactMPC:
         
         # Set all the methods for the optimization problem
         self.terrain(slope=params['slope'])
-        self.integrator(problem_params['cost'])
+        self.ode(problem_params['cost'])
         
         for i in range(self.N):
             self.set_control_constraints(i, params)
-            self.multiple_shooting(i, params)
+            self.collocation_method(i, params)
+            # self.set_quaternion_constraints(i)
             self.set_bounding_box(i)
             
         self.set_terminal_cost(problem_params['cost']['terminal'])
         
         # Set the initial guess for the optimization variables
         self.set_initial_guess(params['initial_state'], u0)
+        
+    def _set_collocation(self) -> None:
+        """
+        Collocation method.
+        """
+        # Degree of interpolating polynomial
+        self.d = 3
+        
+        # Get collocation points as the roots of the Legendre polynomial
+        # Instead of using the collocaiton points from Legendre or Radau polynomials, one can use phase durations
+        self.tau_root = np.append(0, ca.collocation_points(self.d, 'legendre'))
+        
+        #  Coefficients of the collocation equation
+        self.C = np.zeros((self.d+1,self.d+1))
+        
+        # Coefficients of the continuity equation
+        self.D = np.zeros(self.d+1)
+        
+        # Coefficients of the quadrature function
+        self.B = np.zeros(self.d+1)
+        
+        #  Construct polynomial basis
+        for j in range(self.d+1):
+            # Construct Lagrange polynomials to get the polynomial basis at the collocation point
+            # One can build a different basis by simply changing how p is constructed
+            p = np.poly1d([1])
+            for r in range(self.d+1):
+                if r != j:
+                    p *= np.poly1d([1, -self.tau_root[r]]) / (self.tau_root[j]-self.tau_root[r])
+            
+            # Evaluate the polynomial at the final time to get the coefficients of the continuity equation
+            self.D[j] = p(1.0)
+        
+            # Evaluate the time derivative of the polynomial at all collocation points to get the coefficients of the continuity equation
+            pder = np.polyder(p)
+            for r in range(self.d+1):
+                self.C[j,r] = pder(self.tau_root[r])
+        
+            # Evaluate the integral of the polynomial to get the coefficients of the quadrature function
+            pint = np.polyint(p)
+            self.B[j] = pint(1.0)
     
     def terrain(self, slope=0.0):
         """
@@ -228,36 +271,10 @@ class SoftContactMPC:
         control = ca.SX.sym('u', self.model.n_controls)
         
         # Define the dynamics of the system
-        dynamics = ca.Function('dynamics', 
+        self.dynamics = ca.Function('dynamics', 
                                [state, control], 
                                [self.model.dynamics(state, control), self.cost_function(state, control, params)], 
                             )
-        
-        return dynamics
-    
-    def integrator(self, params):
-        """
-        This method is used to define the integrator of the optimization problem.
-        """
-        # Define the integrator
-        ode = self.ode(params)
-        X0 = ca.SX.sym('X0', self.model.n_states)
-        U = ca.SX.sym('U', self.model.n_controls)
-        X = X0
-        Q = 0
-        for j in range(self.n_int):
-            k1, k1_q = ode(X, U)
-            k2, k2_q = ode(X + self.h/2 * k1, U)
-            k3, k3_q = ode(X + self.h/2 * k2, U)
-            k4, k4_q = ode(X + self.h * k3, U)
-            X = X+self.h/6*(k1 + 2*k2 + 2*k3 + k4)
-            Q = Q + self.h/6*(k1_q + 2*k2_q + 2*k3_q + k4_q)
-            # X = X + self.h*k1
-            # Q = Q + self.h*k1_q
-        self.update_state = ca.Function('update_state', 
-                                        [X0, U], 
-                                        [X, Q],
-                                    )
                 
     def set_initial_guess(self, x0, u0):
         """
@@ -265,48 +282,55 @@ class SoftContactMPC:
         """    
         step_height = 0.05
         frequency = 4
-        t = np.linspace(0, self.T, self.N+1)
+        t = np.linspace(0, self.T, self.N * self.d + 1)
         print('Setting initial guess...', end=' ')
         
-        x       = np.linspace(x0[0], self.x_des[0], self.N+1)
-        y       = np.linspace(x0[1], self.x_des[1], self.N+1)
-        z       = np.linspace(x0[2], self.x_des[2], self.N+1)
-        roll    = np.linspace(x0[3], self.x_des[3], self.N+1)
-        pitch   = np.linspace(x0[4], self.x_des[4], self.N+1)
-        yaw     = np.linspace(x0[5], self.x_des[5], self.N+1)
+        x       = np.linspace(x0[0], self.x_des[0], self.N * self.d + 1)
+        y       = np.linspace(x0[1], self.x_des[1], self.N * self.d + 1)
+        z       = np.linspace(x0[2], self.x_des[2], self.N * self.d + 1)
+        roll    = np.linspace(x0[3], self.x_des[3], self.N * self.d + 1)
+        pitch   = np.linspace(x0[4], self.x_des[4], self.N * self.d + 1)
+        yaw     = np.linspace(x0[5], self.x_des[5], self.N * self.d + 1)
         
-        vx      = np.linspace(x0[6], self.x_des[6], self.N+1)
-        vy      = np.linspace(x0[7], self.x_des[7], self.N+1)
-        vz      = np.linspace(x0[8], self.x_des[8], self.N+1)
-        wx      = np.linspace(x0[9], self.x_des[9], self.N+1)
-        wy      = np.linspace(x0[10], self.x_des[10], self.N+1)
-        wz      = np.linspace(x0[11], self.x_des[11], self.N+1)
+        vx      = np.linspace(x0[6], self.x_des[6], self.N * self.d + 1)
+        vy      = np.linspace(x0[7], self.x_des[7], self.N * self.d + 1)
+        vz      = np.linspace(x0[8], self.x_des[8], self.N * self.d + 1)
+        wx      = np.linspace(x0[9], self.x_des[9], self.N * self.d + 1)
+        wy      = np.linspace(x0[10], self.x_des[10], self.N * self.d + 1)
+        wz      = np.linspace(x0[11], self.x_des[11], self.N * self.d + 1)
         
         # Contact points
-        p1_x    = np.linspace(x0[12], self.x_des[12], self.N+1)
-        p1_y    = np.linspace(x0[13], self.x_des[13], self.N+1)
+        p1_x    = np.linspace(x0[12], self.x_des[12], self.N * self.d + 1)
+        p1_y    = np.linspace(x0[13], self.x_des[13], self.N * self.d + 1)
         p1_z    = np.maximum(step_height*np.sin(2*np.pi*frequency*t), 0)
-        p2_x    = np.linspace(x0[15], self.x_des[15], self.N+1)
-        p2_y    = np.linspace(x0[16], self.x_des[16], self.N+1)
+        p2_x    = np.linspace(x0[15], self.x_des[15], self.N * self.d + 1)
+        p2_y    = np.linspace(x0[16], self.x_des[16], self.N * self.d + 1)
         p2_z    = np.maximum(step_height*np.sin(2*np.pi*frequency*t - np.pi/4), 0)
-        p3_x    = np.linspace(x0[18], self.x_des[18], self.N+1)
-        p3_y    = np.linspace(x0[19], self.x_des[19], self.N+1)
+        p3_x    = np.linspace(x0[18], self.x_des[18], self.N * self.d + 1)
+        p3_y    = np.linspace(x0[19], self.x_des[19], self.N * self.d + 1)
         p3_z    = np.maximum(step_height*np.sin(2*np.pi*frequency*t + np.pi/4), 0)
-        p4_x    = np.linspace(x0[21], self.x_des[21], self.N+1)
-        p4_y    = np.linspace(x0[22], self.x_des[22], self.N+1)
+        p4_x    = np.linspace(x0[21], self.x_des[21], self.N * self.d + 1)
+        p4_y    = np.linspace(x0[22], self.x_des[22], self.N * self.d + 1)
         p4_z    = np.maximum(step_height*np.sin(2*np.pi*frequency*t - np.pi/2), 0)
         
 
-        for k in range(self.N+1):
+        for k in range(0, self.N+1):
             self.w0 += [x[k], y[k], z[k], roll[k], pitch[k], yaw[k],
                         vx[k], vy[k], vz[k], wx[k], wy[k], wz[k],
                         p1_x[k], p1_y[k], p1_z[k],
                         p2_x[k], p2_y[k], p2_z[k],
                         p3_x[k], p3_y[k], p3_z[k],
-                        p4_x[k], p4_y[k], p4_z[k],]
+                        p4_x[k], p4_y[k], p4_z[k]]
             if k != self.N:
                 self.w0 += u0
-            
+                for j in range(1, self.d+1):
+                    self.w0 += [x[k+j], y[k+j], z[k+j], roll[k+j], pitch[k+j], yaw[k+j],
+                                vx[k+j], vy[k+j], vz[k+j], wx[k+j], wy[k+j], wz[k+j],
+                                p1_x[k+j], p1_y[k+j], p1_z[k+j],
+                                p2_x[k+j], p2_y[k+j], p2_z[k+j],
+                                p3_x[k+j], p3_y[k+j], p3_z[k+j],
+                                p4_x[k+j], p4_y[k+j], p4_z[k+j],]
+        
         print('Done')
     
     def set_bounds_x(self, states_lb, states_ub):
@@ -370,6 +394,56 @@ class SoftContactMPC:
             lbg=np.zeros(self.model.n_states),
             ubg=np.zeros(self.model.n_states),
             name=f"Multiple shooting {i}",
+        )
+        
+    def collocation_method(self, k, params) -> None:
+        """
+        This method is usd to define the direct collocation transcription for the optimization problem.
+        """
+        Xc = []
+        lb_z_foot = 0.0
+        ub_z_foot = 0.30
+        for j in range(self.d):
+            self.Xkj = ca.SX.sym('X_'+str(k)+'_'+str(j), self.model.n_states)
+            Xc += [self.Xkj]
+            self.w += [self.Xkj]
+            self.set_bounds_x(params['state_lower_bound'], params['state_upper_bound'])
+        
+        #  Loop over collocation points
+        Xk_end = self.D[0]*self.Xk
+        for j in range(1,self.d+1):
+            #  Expression for the state derivative at the collocation point
+            xp = self.C[0,j]*self.Xk
+            for r in range(self.d):
+                xp = xp + self.C[r+1,j]*Xc[r]
+            
+            df, dq = self.dynamics(Xc[j-1], self.Uk)
+            
+            # Collocation constraint
+            self.add_constraint(
+                g=[self.h * df - xp],
+                lbg=np.zeros(self.model.n_states),
+                ubg=np.zeros(self.model.n_states),
+                name=f"Collocation {k}_{j}",
+            )
+            
+            # Add contribution to the end state
+            Xk_end = Xk_end + self.D[j]*Xc[j-1]
+            
+            #  Add contribution to quadrature function
+            self.cost = self.cost + self.B[j]*dq*self.h
+        
+        #  New NLP variable for state at end of interval
+        self.Xk = ca.SX.sym('X_' + str(k+1), self.model.n_states)
+        self.w += [self.Xk]
+        self.set_bounds_x(params['state_lower_bound'], params['state_upper_bound'])
+        
+        # Continuity constraint
+        self.add_constraint(
+            g=[Xk_end - self.Xk],
+            lbg=np.zeros(self.model.n_states),
+            ubg=np.zeros(self.model.n_states),
+            name=f"Continuity_constr_{k}",
         )
     
     def set_control_constraints(self, i, params) -> None:
@@ -435,7 +509,7 @@ class SoftContactMPC:
         p3 = self.Xk[18:21]      # Third foot position
         p4 = self.Xk[21:24]      # Fourth foot position
         
-        R = self.model.rotation_matrix(theta) 
+        R = self.model.rotation_matrix(theta)
         
         for k, p in enumerate([p1, p2, p3, p4]):
             # Bounding box constraints for each foot
@@ -694,7 +768,6 @@ class SoftContactMPC:
         ax.grid(True)
         # ax.axis.set_box_aspect([1,1,1])  # Equal aspect ratio
         
-        # Create a figure for time evolution of states
         fig_time_evolution, axs = plt.subplots(5, 3, figsize=(15, 20))
         fig_time_evolution.suptitle('Time Evolution of State Components')
 
